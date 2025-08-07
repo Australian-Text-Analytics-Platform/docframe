@@ -520,29 +520,53 @@ def compute_token_frequencies(
         try:
             stats = _calculate_log_likelihood_and_effect_size(freq_dicts_list)
         except Exception:
-            # If statistical calculation fails, create empty stats DataFrame
+            # If statistical calculation fails, create empty stats DataFrame with all required columns
             stats_data = []
             for token in sorted(all_tokens):
                 stats_data.append(
                     {
                         "token": token,
+                        "freq_corpus_0": 0,
+                        "freq_corpus_1": 0,
+                        "expected_0": 0.0,
+                        "expected_1": 0.0,
+                        "corpus_0_total": 0,
+                        "corpus_1_total": 0,
+                        "percent_corpus_0": 0.0,
+                        "percent_corpus_1": 0.0,
+                        "percent_diff": 0.0,
                         "log_likelihood_llv": 0.0,
                         "bayes_factor_bic": 0.0,
                         "effect_size_ell": 0.0,
+                        "relative_risk": None,
+                        "log_ratio": None,
+                        "odds_ratio": None,
                         "significance": "",
                     }
                 )
             stats = pl.DataFrame(stats_data)
     else:
-        # Create empty stats DataFrame for non-comparison cases
+        # Create empty stats DataFrame for non-comparison cases with all required columns
         stats_data = []
         for token in sorted(all_tokens):
             stats_data.append(
                 {
                     "token": token,
+                    "freq_corpus_0": 0,
+                    "freq_corpus_1": 0,
+                    "expected_0": 0.0,
+                    "expected_1": 0.0,
+                    "corpus_0_total": 0,
+                    "corpus_1_total": 0,
+                    "percent_corpus_0": 0.0,
+                    "percent_corpus_1": 0.0,
+                    "percent_diff": 0.0,
                     "log_likelihood_llv": 0.0,
                     "bayes_factor_bic": 0.0,
                     "effect_size_ell": 0.0,
+                    "relative_risk": None,
+                    "log_ratio": None,
+                    "odds_ratio": None,
                     "significance": "",
                 }
             )
