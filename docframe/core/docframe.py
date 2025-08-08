@@ -41,7 +41,10 @@ class DocDataFrame:
             schema = df.collect_schema()
         else:
             schema = df.schema
-        string_columns = [col for col, dtype in schema.items() if dtype == pl.Utf8]
+        # Accept both Utf8 and String aliases from Polars
+        string_columns = [
+            col for col, dtype in schema.items() if dtype in (pl.Utf8, pl.String)
+        ]
 
         if not string_columns:
             return None
@@ -119,7 +122,7 @@ class DocDataFrame:
         # Validate that document column is a string type (if column exists)
         if self._document_column_name in columns:
             column_type = schema[self._document_column_name]
-            if column_type != pl.Utf8:
+            if column_type not in (pl.Utf8, pl.String):
                 raise ValueError(
                     f"Column '{self._document_column_name}' is not a string column"
                 )
@@ -604,7 +607,10 @@ class DocLazyFrame:
             schema = df.collect_schema()
         else:
             schema = df.schema
-        string_columns = [col for col, dtype in schema.items() if dtype == pl.Utf8]
+        # Accept both Utf8 and String aliases from Polars
+        string_columns = [
+            col for col, dtype in schema.items() if dtype in (pl.Utf8, pl.String)
+        ]
 
         if not string_columns:
             return None
@@ -662,7 +668,7 @@ class DocLazyFrame:
 
             # Validate that document column is a string type
             column_type = schema[document_column]
-            if column_type != pl.Utf8:
+            if column_type not in (pl.Utf8, pl.String):
                 raise ValueError(f"Column '{document_column}' is not a string column")
 
             self._document_column_name = document_column
