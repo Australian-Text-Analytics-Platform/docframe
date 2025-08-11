@@ -558,15 +558,17 @@ class DocDataFrame:
 
             def wrapper(*args, **kwargs):
                 result = attr(*args, **kwargs)
-                # If result is a DataFrame and contains our document column, wrap it
-                if (
-                    isinstance(result, pl.DataFrame)
-                    and self._document_column_name in result.columns
-                ):
-                    return DocDataFrame(
-                        result, document_column=self._document_column_name
-                    )
-                return result
+                # New behavior: only wrap if original document column still present.
+                # If it was dropped, return raw DataFrame so downstream code can explicitly
+                # choose to re-wrap (e.g., DocDataFrame(result) with guessed column) if desired.
+                if isinstance(result, pl.DataFrame):
+                    if self._document_column_name in result.columns:
+                        return DocDataFrame(
+                            result, document_column=self._document_column_name
+                        )
+                    # Document column absent -> return plain DataFrame
+                    return result
+                return result  # Non-DataFrame results unchanged
 
             return wrapper
 
@@ -772,9 +774,21 @@ class DocLazyFrame:
         # For JSON, we need to collect first
         collected = self.collect()
         json_data = collected.serialize(format="json")
+        # Defensive type narrowing: some static analyzers think serialize can return Optional[str]
+        if (
+            json_data is None
+        ):  # pragma: no cover - safeguard; serialize shouldn't return None
+            raise ValueError("Serialization returned None")
+        if not isinstance(json_data, (str, bytes, bytearray)):
+            raise TypeError(
+                f"Unexpected serialized data type: {type(json_data)}; expected str/bytes"
+            )
+        if not isinstance(json_data, str):  # convert bytes-like to str if needed
+            json_data = json_data.decode("utf-8")  # type: ignore[assignment]
+
         serialized_data = {
             "type": "DocLazyFrame",
-            "data": json.loads(json_data),
+            "data": json.loads(json_data),  # json_data now guaranteed str
             "document_column": self._document_column_name,
         }
         return json.dumps(serialized_data)
@@ -849,32 +863,30 @@ class DocLazyFrame:
             def wrapper(*args, **kwargs):
                 result = attr(*args, **kwargs)
 
-                # Wrap LazyFrame results as DocLazyFrame
+                # New behavior: only wrap when original document column persists.
                 if isinstance(result, pl.LazyFrame):
-                    # Check if document column still exists
                     try:
-                        schema = result.collect_schema()
-                        if (
-                            self._document_column_name
-                            and self._document_column_name in schema
-                        ):
-                            return DocLazyFrame(
-                                result, document_column=self._document_column_name
-                            )
+                        if self._document_column_name is not None:
+                            schema = result.collect_schema()
+                            if self._document_column_name in schema:
+                                return DocLazyFrame(
+                                    result, document_column=self._document_column_name
+                                )
                     except Exception:
                         pass
-                    return DocLazyFrame(result)
+                    # Document column not present -> return raw LazyFrame
+                    return result
 
-                # Wrap DataFrame results as DocDataFrame
-                elif isinstance(result, pl.DataFrame):
+                if isinstance(result, pl.DataFrame):
                     if (
-                        self._document_column_name
+                        self._document_column_name is not None
                         and self._document_column_name in result.columns
                     ):
                         return DocDataFrame(
                             result, document_column=self._document_column_name
                         )
-                    return DocDataFrame(result)
+                    # Document column not present -> return raw DataFrame
+                    return result
 
                 return result
 
