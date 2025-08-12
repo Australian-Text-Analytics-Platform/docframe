@@ -9,6 +9,14 @@ from typing import Any, Dict, List, Optional, Union
 
 import polars as pl
 
+from ._shared import (
+    SerializationFormat,
+    deserialize_with_metadata,
+    serialize_with_metadata,
+)
+from ._shared import guess_document_column as _guess_document_column_helper
+from ._shared import validate_document_column as _validate_document_column
+
 
 class DocDataFrame:
     """
@@ -21,53 +29,19 @@ class DocDataFrame:
     def guess_document_column(
         cls, df: pl.DataFrame | pl.LazyFrame, sample_size: int = 1000
     ) -> Optional[str]:
-        """
-        Guess the best document column by finding the string column with the longest average length.
-
-        Parameters
-        ----------
-        df : pl.DataFrame | pl.LazyFrame
-            The DataFrame or LazyFrame to analyze
-        sample_size : int, default 1000
-            Number of rows to sample for calculating average length
-
-        Returns
-        -------
-        str or None
-            Name of the column with longest average string length, or None if no string columns found
-        """
-        # Get string columns - use collect_schema() for LazyFrame to avoid performance warning
+        """Delegates to shared helper for column inference."""
         if isinstance(df, pl.LazyFrame):
             schema = df.collect_schema()
+
+            def sampler(n: int):
+                return df.head(n).collect()
         else:
             schema = df.schema
-        # Accept both Utf8 and String aliases from Polars
-        string_columns = [
-            col for col, dtype in schema.items() if dtype in (pl.Utf8, pl.String)
-        ]
 
-        if not string_columns:
-            return None
+            def sampler(n: int):
+                return df.head(min(n, len(df)))
 
-        if len(string_columns) == 1:
-            return string_columns[0]
-
-        # Calculate average length for each string column (using first sample_size rows)
-        # Handle both DataFrame and LazyFrame
-        if isinstance(df, pl.LazyFrame):
-            sample_df = df.head(sample_size).collect()
-        else:
-            sample_df = df.head(min(sample_size, len(df)))
-
-        avg_lengths = {}
-
-        for col in string_columns:
-            # Calculate average length, handling nulls
-            avg_length = sample_df.select(pl.col(col).str.len_chars().mean()).item()
-            avg_lengths[col] = avg_length or 0  # Handle None case
-
-        # Return column with longest average length
-        return max(avg_lengths.keys(), key=lambda k: avg_lengths[k])
+        return _guess_document_column_helper(schema, sampler, sample_size=sample_size)
 
     def __init__(
         self,
@@ -110,22 +84,13 @@ class DocDataFrame:
         schema = self._df.schema
         columns = self._df.columns
 
-        # Ensure document column exists
-        if self._document_column_name not in columns:
-            if isinstance(data, dict) and self._document_column_name in data:
-                pass  # Column will be created from dict
-            else:
-                raise ValueError(
-                    f"Document column '{self._document_column_name}' not found in data"
-                )
-
-        # Validate that document column is a string type (if column exists)
+        # Validate column existence + type
         if self._document_column_name in columns:
-            column_type = schema[self._document_column_name]
-            if column_type not in (pl.Utf8, pl.String):
-                raise ValueError(
-                    f"Column '{self._document_column_name}' is not a string column"
-                )
+            _validate_document_column(schema, self._document_column_name)
+        else:
+            raise ValueError(
+                f"Document column '{self._document_column_name}' not found in data"
+            )
 
     @classmethod
     def from_texts(
@@ -266,8 +231,8 @@ class DocDataFrame:
 
     # Text-specific methods that operate on the document column
     def tokenize(self, lowercase: bool = True, remove_punct: bool = True) -> pl.Series:
-        """Tokenize documents"""
-        return self.document.text.tokenize(
+        """Tokenize documents."""
+        return self.document.text.tokenize(  # type: ignore[attr-defined]
             lowercase=lowercase, remove_punct=remove_punct
         )
 
@@ -278,44 +243,37 @@ class DocDataFrame:
         remove_digits: bool = False,
         remove_extra_whitespace: bool = True,
     ) -> "DocDataFrame":
-        """Clean the document column"""
-        cleaned_docs = self.document.text.clean(
+        """Return a new DocDataFrame with cleaned document text."""
+        cleaned_docs = self.document.text.clean(  # type: ignore[attr-defined]
             lowercase=lowercase,
             remove_punct=remove_punct,
             remove_digits=remove_digits,
             remove_extra_whitespace=remove_extra_whitespace,
         )
-
-        # Replace the document column with cleaned version
         result_df = self._df.with_columns(
             cleaned_docs.alias(self._document_column_name)
         )
         return DocDataFrame(result_df, document_column=self._document_column_name)
 
     def add_word_count(self, column_name: str = "word_count") -> "DocDataFrame":
-        """Add word count column"""
-        word_counts = self.document.text.word_count()
+        word_counts = self.document.text.word_count()  # type: ignore[attr-defined]
         result_df = self._df.with_columns(word_counts.alias(column_name))
         return DocDataFrame(result_df, document_column=self._document_column_name)
 
     def add_char_count(self, column_name: str = "char_count") -> "DocDataFrame":
-        """Add character count column"""
-        char_counts = self.document.text.char_count()
+        char_counts = self.document.text.char_count()  # type: ignore[attr-defined]
         result_df = self._df.with_columns(char_counts.alias(column_name))
         return DocDataFrame(result_df, document_column=self._document_column_name)
 
     def add_sentence_count(self, column_name: str = "sentence_count") -> "DocDataFrame":
-        """Add sentence count column"""
-        sentence_counts = self.document.text.sentence_count()
+        sentence_counts = self.document.text.sentence_count()  # type: ignore[attr-defined]
         result_df = self._df.with_columns(sentence_counts.alias(column_name))
         return DocDataFrame(result_df, document_column=self._document_column_name)
 
     def filter_by_length(
         self, min_words: Optional[int] = None, max_words: Optional[int] = None
     ) -> "DocDataFrame":
-        """Filter documents by word count"""
-        word_counts = self.document.text.word_count()
-
+        word_counts = self.document.text.word_count()  # type: ignore[attr-defined]
         if min_words is not None and max_words is not None:
             mask = (word_counts >= min_words) & (word_counts <= max_words)
         elif min_words is not None:
@@ -324,15 +282,13 @@ class DocDataFrame:
             mask = word_counts <= max_words
         else:
             mask = pl.Series([True] * len(word_counts))
-
         filtered_df = self._df.filter(mask)
         return DocDataFrame(filtered_df, document_column=self._document_column_name)
 
     def filter_by_pattern(
         self, pattern: str, case_sensitive: bool = False
     ) -> "DocDataFrame":
-        """Filter documents containing a pattern"""
-        mask = self.document.text.contains_pattern(
+        mask = self.document.text.contains_pattern(  # type: ignore[attr-defined]
             pattern, case_sensitive=case_sensitive
         )
         filtered_df = self._df.filter(mask)
@@ -392,7 +348,9 @@ class DocDataFrame:
         >>> dtm_df = doc_df.to_dtm(method="count", min_df=2, max_df=0.8)
         """
         # Get sparse matrix and vocabulary from the text namespace
-        sparse_matrix, vocabulary = self.document.text.to_dtm(method=method, **kwargs)
+        sparse_matrix, vocabulary = self.document.text.to_dtm(  # type: ignore[attr-defined]
+            method=method, **kwargs
+        )
 
         # Convert sparse matrix to dense and create DataFrame
         dense_matrix = sparse_matrix.toarray()
@@ -421,11 +379,13 @@ class DocDataFrame:
             New DocDataFrame with joined data
         """
         if isinstance(other, DocDataFrame):
-            other_df = other._df
+            other_df: pl.DataFrame = other._df
+        elif isinstance(other, pl.LazyFrame):
+            other_df = other.collect()
         else:
-            other_df = other
+            other_df = other  # type: ignore[assignment]
 
-        joined_df = self._df.join(other_df, *args, **kwargs)
+        joined_df = self._df.join(other_df, *args, **kwargs)  # type: ignore[arg-type]
         return DocDataFrame(joined_df, document_column=self._document_column_name)
 
     # Summary methods
@@ -442,10 +402,10 @@ class DocDataFrame:
                     "char_count_std",
                 ],
                 self._document_column_name: [
-                    doc_series.text.word_count().mean(),
-                    doc_series.text.word_count().std(),
-                    doc_series.text.char_count().mean(),
-                    doc_series.text.char_count().std(),
+                    doc_series.text.word_count().mean(),  # type: ignore[attr-defined]
+                    doc_series.text.word_count().std(),  # type: ignore[attr-defined]
+                    doc_series.text.char_count().mean(),  # type: ignore[attr-defined]
+                    doc_series.text.char_count().std(),  # type: ignore[attr-defined]
                 ],
             }
         )
@@ -457,95 +417,43 @@ class DocDataFrame:
         self,
         file: IOBase | str | Path | None = None,
         *,
-        format: str = "json",
+        format: SerializationFormat = "json",
     ) -> str | None:
-        """
-        Serialize DocDataFrame to JSON string or file, preserving document column information.
+        """Serialize (JSON only).
 
-        Parameters
-        ----------
-        file : IOBase, str, Path, or None
-            File path or file-like object to write to. If None, returns serialized data.
-        format : str, default 'json'
-            Serialization format. Only 'json' is supported.
-
-        Returns
-        -------
-        str or None
-            Serialized JSON string if file is None, otherwise None
+        The previous custom binary container has been removed. Passing
+        format="binary" raises NotImplementedError to make migration explicit.
         """
+        if format == "binary":
+            raise NotImplementedError("Binary serialization removed; use format='json'")
         if format != "json":
-            raise ValueError(f"Unsupported format: {format}. Only 'json' is supported")
-
-        metadata = {
-            "document_column_name": self._document_column_name,
-        }
-
-        # Convert to dictionary format
-        df_dict = self._df.to_dict(as_series=False)
-        serialized_data = {"metadata": metadata, "data": df_dict}
-        result = json.dumps(serialized_data)
-
-        # Handle file output
-        if file is not None:
-            if isinstance(file, (str, Path)):
-                with open(file, "w") as f:
-                    f.write(result)
-            else:
-                # file-like object
-                file.write(result)
-            return None
-
-        return result
+            raise ValueError(
+                f"Unsupported format: {format!r}. Only 'json' is supported"
+            )
+        return serialize_with_metadata(
+            self._df,
+            self._document_column_name,
+            file=file,
+            format="json",
+            container_type="DocDataFrame",
+        )
 
     @classmethod
     def deserialize(
         cls,
-        source: str | Path | IOBase,
+        source: str | Path | IOBase | bytes,
         *,
-        format: str = "json",
+        format: SerializationFormat = "json",
     ) -> "DocDataFrame":
-        """
-        Deserialize JSON data back to DocDataFrame.
-
-        Parameters
-        ----------
-        source : str, Path, or IOBase
-            Source to deserialize from. Can be a file path, file-like object, or JSON string.
-        format : str, default "json"
-            Serialization format. Only 'json' is supported.
-
-        Returns
-        -------
-        DocDataFrame
-            Deserialized DocDataFrame
-        """
+        if format == "binary":
+            raise NotImplementedError(
+                "Binary deserialization removed; use format='json'"
+            )
         if format != "json":
-            raise ValueError(f"Unsupported format: {format}. Only 'json' is supported")
-
-        # Read data from source
-        if isinstance(source, (str, Path)):
-            # Check if it's a file path or JSON string
-            try:
-                # Try to parse as JSON string first
-                serialized_data = json.loads(str(source))
-                data = str(source)
-            except json.JSONDecodeError:
-                # It's a file path, read from file
-                with open(source, "r") as f:
-                    data = f.read()
-        else:
-            # file-like object
-            data = source.read()
-
-        # Parse JSON data
-        serialized_data = json.loads(data)
-        metadata = serialized_data["metadata"]
-        df_dict = serialized_data["data"]
-
-        # Reconstruct DataFrame
-        df = pl.DataFrame(df_dict)
-
+            raise ValueError(
+                f"Unsupported format: {format!r}. Only 'json' is supported"
+            )
+        metadata, df = deserialize_with_metadata(source, format="json")
         return cls(df, document_column=metadata["document_column_name"])
 
     # Delegate other operations to underlying DataFrame
@@ -587,55 +495,18 @@ class DocLazyFrame:
     def guess_document_column(
         cls, df: pl.DataFrame | pl.LazyFrame, sample_size: int = 1000
     ) -> Optional[str]:
-        """
-        Guess the best document column by finding the string column with the longest average length.
-
-        For LazyFrames, this uses schema information and samples data for analysis.
-
-        Parameters
-        ----------
-        df : pl.DataFrame | pl.LazyFrame
-            The DataFrame or LazyFrame to analyze
-        sample_size : int, default 1000
-            Number of rows to sample for calculating average length
-
-        Returns
-        -------
-        str or None
-            Name of the column with longest average string length, or None if no string columns found
-        """
-        # Get string columns - use collect_schema() for LazyFrame to avoid performance warning
         if isinstance(df, pl.LazyFrame):
             schema = df.collect_schema()
+
+            def sampler(n: int):
+                return df.head(n).collect()
         else:
             schema = df.schema
-        # Accept both Utf8 and String aliases from Polars
-        string_columns = [
-            col for col, dtype in schema.items() if dtype in (pl.Utf8, pl.String)
-        ]
 
-        if not string_columns:
-            return None
+            def sampler(n: int):
+                return df.head(min(n, len(df)))
 
-        if len(string_columns) == 1:
-            return string_columns[0]
-
-        # Calculate average length for each string column (using first sample_size rows)
-        # Handle both DataFrame and LazyFrame
-        if isinstance(df, pl.LazyFrame):
-            sample_df = df.head(sample_size).collect()
-        else:
-            sample_df = df.head(min(sample_size, len(df)))
-
-        avg_lengths = {}
-
-        for col in string_columns:
-            # Calculate average length, handling nulls
-            avg_length = sample_df.select(pl.col(col).str.len_chars().mean()).item()
-            avg_lengths[col] = avg_length or 0  # Handle None case
-
-        # Return column with longest average length
-        return max(avg_lengths.keys(), key=lambda k: avg_lengths[k])
+        return _guess_document_column_helper(schema, sampler, sample_size=sample_size)
 
     def __init__(
         self,
@@ -661,18 +532,8 @@ class DocLazyFrame:
         if document_column is None:
             self._document_column_name = self.guess_document_column(self._df)
         else:
-            # Validate the column exists
             schema = self._df.collect_schema()
-            if document_column not in schema:
-                raise ValueError(
-                    f"Document column '{document_column}' not found in LazyFrame"
-                )
-
-            # Validate that document column is a string type
-            column_type = schema[document_column]
-            if column_type not in (pl.Utf8, pl.String):
-                raise ValueError(f"Column '{document_column}' is not a string column")
-
+            _validate_document_column(schema, document_column)
             self._document_column_name = document_column
 
     @property
@@ -754,90 +615,67 @@ class DocLazyFrame:
         """
         return DocLazyFrame(self._df, document_column=column_name)
 
-    def serialize(self, format: str = "json") -> str:
-        """
-        Serialize the DocLazyFrame to JSON.
-
-        Parameters
-        ----------
-        format : str, default "json"
-            Serialization format. Only 'json' is supported.
-
-        Returns
-        -------
-        str
-            Serialized JSON string
-        """
+    def serialize(
+        self,
+        file: IOBase | str | Path | None = None,
+        *,
+        format: SerializationFormat = "json",
+    ) -> str | None:
+        """Serialize the collected LazyFrame with metadata (JSON only)."""
+        if format == "binary":
+            raise NotImplementedError("Binary serialization removed; use format='json'")
         if format != "json":
-            raise ValueError(f"Unsupported format: {format}. Only 'json' is supported")
-
-        # For JSON, we need to collect first
-        collected = self.collect()
-        json_data = collected.serialize(format="json")
-        # Defensive type narrowing: some static analyzers think serialize can return Optional[str]
-        if (
-            json_data is None
-        ):  # pragma: no cover - safeguard; serialize shouldn't return None
-            raise ValueError("Serialization returned None")
-        if not isinstance(json_data, (str, bytes, bytearray)):
-            raise TypeError(
-                f"Unexpected serialized data type: {type(json_data)}; expected str/bytes"
+            raise ValueError(
+                f"Unsupported format: {format!r}. Only 'json' is supported"
             )
-        if not isinstance(json_data, str):  # convert bytes-like to str if needed
-            json_data = json_data.decode("utf-8")  # type: ignore[assignment]
-
+        collected = self.collect()
+        inner = collected.serialize(format="json")
+        if inner is None:
+            raise ValueError("Unexpected None from inner JSON serialization")
         serialized_data = {
             "type": "DocLazyFrame",
-            "data": json.loads(json_data),  # json_data now guaranteed str
+            "data": json.loads(inner),
             "document_column": self._document_column_name,
         }
-        return json.dumps(serialized_data)
+        text = json.dumps(serialized_data)
+        if file is not None:
+            if isinstance(file, (str, Path)):
+                with open(file, "w", encoding="utf-8") as f:
+                    f.write(text)
+            else:
+                file.write(text)  # type: ignore[arg-type]
+            return None
+        return text
 
     @classmethod
     def deserialize(
-        cls, source: str | Path | IOBase, format: str = "json"
+        cls,
+        source: str | Path | IOBase | bytes,
+        *,
+        format: SerializationFormat = "json",
     ) -> "DocLazyFrame":
-        """
-        Deserialize JSON data back to DocLazyFrame.
-
-        Parameters
-        ----------
-        source : str, Path, or IOBase
-            Source to deserialize from. Can be a file path, file-like object, or JSON string.
-        format : str, default "json"
-            Serialization format. Only 'json' is supported.
-
-        Returns
-        -------
-        DocLazyFrame
-            Deserialized DocLazyFrame
-        """
+        if format == "binary":
+            raise NotImplementedError(
+                "Binary deserialization removed; use format='json'"
+            )
         if format != "json":
-            raise ValueError(f"Unsupported format: {format}. Only 'json' is supported")
-
-        # Read data from source
+            raise ValueError(
+                f"Unsupported format: {format!r}. Only 'json' is supported"
+            )
         if isinstance(source, (str, Path)):
-            # Check if it's a file path or JSON string
             try:
-                # Try to parse as JSON string first
-                data = json.loads(str(source))
+                obj = json.loads(str(source))
             except json.JSONDecodeError:
-                # It's a file path, read from file
-                with open(source, "r") as f:
-                    data = json.loads(f.read())
+                with open(source, "r", encoding="utf-8") as f:
+                    obj = json.load(f)
         else:
-            # file-like object
-            data = json.loads(source.read())
-
-        if data["type"] != "DocLazyFrame":
-            raise ValueError(f"Expected DocLazyFrame data, got {data['type']}")
-
-        # Deserialize the inner DocDataFrame and convert to LazyFrame
-        doc_data = data["data"]
-        doc_df = DocDataFrame.deserialize(json.dumps(doc_data))
-        lazyframe = doc_df._df.lazy()
-
-        return cls(lazyframe, document_column=data["document_column"])
+            obj = json.loads(source.read())  # type: ignore[arg-type]
+        if obj.get("type") != "DocLazyFrame":
+            raise ValueError(f"Expected DocLazyFrame data, got {obj.get('type')!r}")
+        inner = obj["data"]
+        metadata_inner = inner["metadata"]["document_column_name"]
+        df_inner = pl.DataFrame(inner["data"])
+        return cls(df_inner.lazy(), document_column=metadata_inner)
 
     def __getattr__(self, name: str) -> Any:
         """
