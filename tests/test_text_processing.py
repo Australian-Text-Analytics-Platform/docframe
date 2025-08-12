@@ -183,6 +183,10 @@ class TestDocDataFrameAdvanced:
 
     def test_to_dtm(self):
         """Test document-term matrix creation"""
+        try:
+            import sklearn  # noqa: F401
+        except ImportError:
+            pytest.skip("scikit-learn not installed; skipping DTM test")
         df = DocDataFrame(
             {"document": ["hello world", "world test", "hello test world"]}
         )

@@ -11,7 +11,9 @@ dependencies = [
     "polars>=1.0.0",
     "spacy>=3.7.0",
     "nltk>=3.8",
-    "tqdm>=4.66.0"
+    "tqdm>=4.66.0",
+    "pytest>=8.4.1",
+    "scikit-learn>=1.6.1",
 ]
 
 [build-system]
