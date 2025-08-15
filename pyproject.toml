@@ -6,7 +6,7 @@ authors = [
     {name = "Senhui (Alex) Guo", email = "senhui.guo@sydney.edu.au"}
 ]
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "polars>=1.0.0",
     "spacy>=3.7.0",
