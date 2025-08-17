@@ -98,32 +98,6 @@ class TestDocDataFrame:
         data = {
             "document": ["Hello world", "This is a test document"],
             "author": ["Alice", "Bob"],
-            "id": [1, 2],
-        }
-        doc_df = DocDataFrame(data, document_column="document")
-
-        # Test JSON serialization
-        json_data = doc_df.serialize(format="json")
-        assert isinstance(json_data, str)
-        assert len(json_data) > 0
-
-        # Test JSON deserialization
-        restored_df = DocDataFrame.deserialize(json_data, format="json")
-        assert restored_df.active_document_name == "document"
-        assert len(restored_df) == len(doc_df)
-        assert restored_df.document.to_list() == doc_df.document.to_list()
-
-        # Check that other columns are preserved
-        assert "author" in restored_df.columns
-        assert "id" in restored_df.columns
-        assert restored_df.to_polars()["author"].to_list() == ["Alice", "Bob"]
-
-    def test_serialize_json(self):
-        """Test JSON serialization and deserialization"""
-
-        data = {
-            "document": ["Hello world", "This is a test document"],
-            "author": ["Alice", "Bob"],
             "score": [0.8, 0.9],
         }
         doc_df = DocDataFrame(data, document_column="document")
@@ -142,8 +116,8 @@ class TestDocDataFrame:
         # Check that other columns are preserved
         assert "author" in restored_df.columns
         assert "score" in restored_df.columns
-        assert restored_df.to_polars()["author"].to_list() == ["Alice", "Bob"]
-        assert restored_df.to_polars()["score"].to_list() == [0.8, 0.9]
+        assert restored_df.to_dataframe()["author"].to_list() == ["Alice", "Bob"]
+        assert restored_df.to_dataframe()["score"].to_list() == [0.8, 0.9]
 
     def test_serialize_to_file_json(self):
         """Test serialization to JSON file"""
@@ -179,9 +153,10 @@ class TestDocDataFrame:
         from docframe.core.docframe import DocLazyFrame
 
         # Create a DocLazyFrame
-        df = pl.DataFrame(
-            {"document": ["Hello world", "This is a test"], "id": [1, 2]}
-        ).lazy()
+        df = pl.DataFrame({
+            "document": ["Hello world", "This is a test"],
+            "id": [1, 2],
+        }).lazy()
 
         doc_lf = DocLazyFrame(df, document_column="document")
         assert doc_lf.active_document_name == "document"
@@ -243,8 +218,8 @@ class TestDocDataFrame:
         assert isinstance(lazy_df.to_lazyframe(), pl.LazyFrame)
 
         # Both should have proper string representations
-        assert "Document column:" in str(df)
-        assert "Document column:" in str(lazy_df)
+        assert "document column:" in str(df)
+        assert "document column:" in str(lazy_df)
 
     def test_serialize_custom_document_column(self):
         """Test serialization preserves custom document column name"""

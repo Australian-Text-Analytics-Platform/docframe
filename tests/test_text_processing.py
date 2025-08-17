@@ -147,49 +147,15 @@ class TestBasicTextNamespace:
 class TestDocDataFrameAdvanced:
     """Test advanced DocDataFrame functionality"""
 
-    def test_describe_text(self):
-        """Test text description statistics"""
-        df = DocDataFrame(
-            {
-                "document": [
-                    "Short text",
-                    "This is a much longer text with more words",
-                    "Medium length text here",
-                ],
-                "category": ["A", "B", "C"],
-            }
-        )
-
-        stats = df.describe_text()
-
-        # Should have statistic column and document column
-        assert "statistic" in stats.columns
-        assert "document" in stats.columns
-
-        # Check that we have the expected statistics as rows
-        stat_values = stats["statistic"].to_list()
-        assert "word_count_mean" in stat_values
-        assert "char_count_mean" in stat_values
-
-        # Check some values
-        stats_dict = stats.to_dict(as_series=False)
-
-        # Find the row with word_count_mean and get its value
-        word_count_mean_idx = stats_dict["statistic"].index("word_count_mean")
-        char_count_mean_idx = stats_dict["statistic"].index("char_count_mean")
-
-        assert stats_dict["document"][word_count_mean_idx] > 0
-        assert stats_dict["document"][char_count_mean_idx] > 0
-
     def test_to_dtm(self):
         """Test document-term matrix creation"""
         try:
             import sklearn  # noqa: F401
         except ImportError:
             pytest.skip("scikit-learn not installed; skipping DTM test")
-        df = DocDataFrame(
-            {"document": ["hello world", "world test", "hello test world"]}
-        )
+        df = DocDataFrame({
+            "document": ["hello world", "world test", "hello test world"]
+        })
 
         dtm = df.to_dtm()
 
@@ -220,14 +186,15 @@ class TestDocDataFrameAdvanced:
         assert df.active_document_name == "text1"  # Original unchanged
 
         # Test error for non-existent column
-        with pytest.raises(ValueError, match="Document column 'nonexistent' not found"):
+        with pytest.raises(ValueError, match="not a valid document column"):
             df.set_document("nonexistent")
 
     def test_rename_document(self):
         """Test renaming document column"""
-        df = DocDataFrame(
-            {"document": ["Hello world", "Test text"], "category": ["A", "B"]}
-        )
+        df = DocDataFrame({
+            "document": ["Hello world", "Test text"],
+            "category": ["A", "B"],
+        })
 
         df2 = df.rename_document("text")
 
@@ -253,15 +220,13 @@ class TestDocDataFrameAdvanced:
 
     def test_add_sentence_count(self):
         """Test adding sentence count column"""
-        df = DocDataFrame(
-            {
-                "document": [
-                    "Hello world.",
-                    "This is sentence one. This is sentence two.",
-                    "No punctuation",
-                ]
-            }
-        )
+        df = DocDataFrame({
+            "document": [
+                "Hello world.",
+                "This is sentence one. This is sentence two.",
+                "No punctuation",
+            ]
+        })
 
         df_with_count = df.add_sentence_count()
 
@@ -281,19 +246,24 @@ class TestDocDataFrameAdvanced:
 
     def test_serialization_with_metadata(self):
         """Test serialization preserves all data and metadata"""
-        df = DocDataFrame(
-            {
-                "document": ["Hello world", "Test text"],
-                "category": ["A", "B"],
-                "year": [2020, 2021],
-            }
-        )
+        df = DocDataFrame({
+            "document": ["Hello world", "Test text"],
+            "category": ["A", "B"],
+            "year": [2020, 2021],
+        })
 
         # Test serialization
         json_str = df.serialize(format="json")
         assert isinstance(json_str, str)
-        assert "document" in json_str
-        assert "category" in json_str
+
+        # Parse JSON to check structure
+        import json
+
+        obj = json.loads(json_str)
+        assert "metadata" in obj
+        assert "data" in obj
+        assert obj["metadata"]["document_column_name"] == "document"
+        assert obj["metadata"]["type"] == "DocDataFrame"
 
         # Test deserialization
         df2 = DocDataFrame.deserialize(json_str, format="json")

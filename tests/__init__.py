@@ -1,3 +1,0 @@
-"""
-DocFrame test suite
-"""

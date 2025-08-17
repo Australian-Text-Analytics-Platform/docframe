@@ -91,7 +91,7 @@ def docio(func: Callable) -> Callable:
                     return result.text.to_doclazyframe(document_column=document_column)
                 else:
                     return result.text.to_docdataframe(document_column=document_column)
-            except ValueError as e:
+            except (ValueError, AssertionError) as e:
                 warnings.warn(
                     f"Could not create DocDataFrame/DocLazyFrame: {e}", UserWarning
                 )

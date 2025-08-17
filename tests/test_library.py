@@ -7,12 +7,6 @@ Simple example demonstrating docframe functionality
 def test_basic_functionality():
     """Test that our library can be imported and used"""
     try:
-        import os
-        import sys
-
-        # Add parent directory to path for importing docframe
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
         import polars as pl
 
         from docframe import DocDataFrame

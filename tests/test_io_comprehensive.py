@@ -198,13 +198,14 @@ class TestIOOperations:
 class TestDataConversions:
     """Test data conversion functionality"""
 
-    def test_to_polars_conversion(self):
+    def test_to_dataframe_conversion(self):
         """Test conversion to regular polars DataFrame"""
-        df = DocDataFrame(
-            {"document": ["Hello world", "Test text"], "category": ["A", "B"]}
-        )
+        df = DocDataFrame({
+            "document": ["Hello world", "Test text"],
+            "category": ["A", "B"],
+        })
 
-        polars_df = df.to_polars()
+        polars_df = df.to_dataframe()
         assert isinstance(polars_df, pl.DataFrame)
         assert "document" in polars_df.columns
         assert "category" in polars_df.columns
@@ -212,9 +213,10 @@ class TestDataConversions:
 
     def test_to_doclazyframe_conversion(self):
         """Test conversion to DocLazyFrame"""
-        df = DocDataFrame(
-            {"document": ["Hello world", "Test text"], "category": ["A", "B"]}
-        )
+        df = DocDataFrame({
+            "document": ["Hello world", "Test text"],
+            "category": ["A", "B"],
+        })
 
         lazy_df = df.to_doclazyframe()
         from docframe.core.docframe import DocLazyFrame
@@ -224,13 +226,15 @@ class TestDataConversions:
 
     def test_concat_documents_function(self):
         """Test concatenating DocDataFrames"""
-        df1 = DocDataFrame(
-            {"document": ["Hello world", "Test text"], "category": ["A", "B"]}
-        )
+        df1 = DocDataFrame({
+            "document": ["Hello world", "Test text"],
+            "category": ["A", "B"],
+        })
 
-        df2 = DocDataFrame(
-            {"document": ["More text", "Final doc"], "category": ["C", "D"]}
-        )
+        df2 = DocDataFrame({
+            "document": ["More text", "Final doc"],
+            "category": ["C", "D"],
+        })
 
         from docframe import concat_documents
 
@@ -243,13 +247,11 @@ class TestDataConversions:
 
     def test_serialization_formats(self):
         """Test different serialization formats"""
-        df = DocDataFrame(
-            {
-                "document": ["Hello world", "Test text"],
-                "category": ["A", "B"],
-                "year": [2020, 2021],
-            }
-        )
+        df = DocDataFrame({
+            "document": ["Hello world", "Test text"],
+            "category": ["A", "B"],
+            "year": [2020, 2021],
+        })
 
         # Test JSON serialization
         json_str = df.serialize(format="json")
@@ -298,7 +300,5 @@ class TestErrorHandling:
     def test_empty_dataframe_handling(self):
         """Test handling of empty DataFrames"""
         # Creating empty DocDataFrame should raise error
-        with pytest.raises(
-            ValueError, match="Document column 'document' not found in data"
-        ):
+        with pytest.raises(ValueError, match="not a valid document column"):
             DocDataFrame({})

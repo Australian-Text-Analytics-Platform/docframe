@@ -1,15 +1,15 @@
-"""
-Pytest configuration and test setup for DocFrame
+"""Helper functions for tests (separated from conftest fixtures).
+
+These are plain utilities that some tests import directly. Keeping them
+out of ``conftest.py`` avoids the anti-pattern of importing from
+``conftest`` and lets us drop ``__init__.py`` so that ``tests`` is not
+treated as a package.
 """
 
 from pathlib import Path
 
-import pytest
 
-
-@pytest.fixture
-def sample_data():
-    """Sample data for testing auto-detection"""
+def get_sample_data():
     return {
         "id": [1, 2, 3],
         "title": ["Short title", "Another title", "Brief title"],
@@ -22,12 +22,13 @@ def sample_data():
     }
 
 
-@pytest.fixture
-def tweet_data_path():
-    """Path to the tweet dataset"""
-    project_root = Path(__file__).parent.parent
-    return (
-        project_root
+def _project_root() -> Path:
+    return Path(__file__).parent.parent
+
+
+def get_tweet_data_path() -> str:
+    return str(
+        _project_root()
         / "examples"
         / "data"
         / "ADO"
@@ -35,12 +36,5 @@ def tweet_data_path():
     )
 
 
-@pytest.fixture
-def candidate_data_path():
-    """Path to the candidate dataset"""
-    project_root = Path(__file__).parent.parent
-    return project_root / "examples" / "data" / "ADO" / "candidate_info.csv"
-
-
-# NOTE: Avoid importing from this file inside tests; expose functionality
-# via fixtures only. Keep ``tests`` as a non-package (no __init__.py).
+def get_candidate_data_path() -> str:
+    return str(_project_root() / "examples" / "data" / "ADO" / "candidate_info.csv")

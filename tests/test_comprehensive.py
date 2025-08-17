@@ -3,44 +3,34 @@ Test suite for DocFrame core functionality
 """
 
 import os
-import sys
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import tempfile
 
 import polars as pl
 
 from docframe import DocDataFrame
 
-# Import the helper functions from conftest
-from .conftest import get_sample_data, get_tweet_data_path
-
 
 class TestDocDataFrame:
     """Test DocDataFrame functionality"""
 
-    def test_creation_with_auto_detection(self):
+    def test_creation_with_auto_detection(self, sample_data):
         """Test DocDataFrame creation with automatic document column detection"""
-        data = get_sample_data()
-        df = DocDataFrame(data)
+        df = DocDataFrame(sample_data)
 
         # Should auto-detect 'content' as the document column
         assert df.active_document_name == "content"
         assert len(df) == 3
 
-    def test_creation_with_manual_column(self):
+    def test_creation_with_manual_column(self, sample_data):
         """Test DocDataFrame creation with manual document column specification"""
-        data = get_sample_data()
-        df = DocDataFrame(data, document_column="title")
+        df = DocDataFrame(sample_data, document_column="title")
 
         assert df.active_document_name == "title"
         assert df.document[0] == "Short title"
 
-    def test_guess_document_column_class_method(self):
+    def test_guess_document_column_class_method(self, sample_data):
         """Test the guess_document_column class method"""
-        data = get_sample_data()
-        pl_df = pl.DataFrame(data)
+        pl_df = pl.DataFrame(sample_data)
 
         guessed = DocDataFrame.guess_document_column(pl_df)
         assert guessed == "content"  # Should pick the longest column
@@ -55,20 +45,18 @@ class TestDocDataFrame:
         assert len(df) == 3
         assert df.document[0] == "Document 1"
 
-    def test_document_property_access(self):
+    def test_document_property_access(self, sample_data):
         """Test accessing the document column via .document property"""
-        data = get_sample_data()
-        df = DocDataFrame(data)
+        df = DocDataFrame(sample_data)
 
         # Should return a polars Series with text processing capabilities
         doc_series = df.document
         assert isinstance(doc_series, pl.Series)
         assert len(doc_series) == 3
 
-    def test_add_text_statistics(self):
+    def test_add_text_statistics(self, sample_data):
         """Test adding text statistics columns"""
-        data = get_sample_data()
-        df = DocDataFrame(data)
+        df = DocDataFrame(sample_data)
 
         # Add various text statistics
         df_with_stats = df.add_word_count().add_char_count().add_sentence_count()
@@ -81,10 +69,9 @@ class TestDocDataFrame:
         word_counts = df_with_stats.select("word_count").to_series().to_list()
         assert all(count > 0 for count in word_counts)
 
-    def test_clean_documents(self):
+    def test_clean_documents(self, sample_data):
         """Test document cleaning"""
-        data = get_sample_data()
-        df = DocDataFrame(data)
+        df = DocDataFrame(sample_data)
 
         cleaned_df = df.clean_documents(lowercase=True, remove_punct=True)
 
@@ -95,10 +82,9 @@ class TestDocDataFrame:
         first_doc = cleaned_df.document[0]
         assert first_doc.islower() or first_doc == ""  # Should be lowercase
 
-    def test_filter_operations(self):
+    def test_filter_operations(self, sample_data):
         """Test filtering operations"""
-        data = get_sample_data()
-        df = DocDataFrame(data)
+        df = DocDataFrame(sample_data)
 
         # Filter by length
         long_docs = df.filter_by_length(min_words=10)
@@ -108,10 +94,9 @@ class TestDocDataFrame:
         filtered = df.filter_by_pattern("document", case_sensitive=False)
         assert len(filtered) >= 0  # Should find documents containing "document"
 
-    def test_sampling(self):
+    def test_sampling(self, sample_data):
         """Test document sampling"""
-        data = get_sample_data()
-        df = DocDataFrame(data)
+        df = DocDataFrame(sample_data)
 
         # Sample 2 documents
         sampled = df.sample(n=2, seed=42)
@@ -122,10 +107,9 @@ class TestDocDataFrame:
         sampled_frac = df.sample(fraction=0.5, seed=42)
         assert len(sampled_frac) <= len(df)
 
-    def test_metadata_operations(self):
+    def test_metadata_operations(self, sample_data):
         """Test metadata operations via polars delegation"""
-        data = get_sample_data()
-        df = DocDataFrame(data)
+        df = DocDataFrame(sample_data)
 
         # Add metadata via with_columns
         df_with_meta = df.with_columns(pl.lit([0.1, 0.2, 0.3]).alias("score"))
@@ -140,17 +124,16 @@ class TestDocDataFrame:
         assert "type" in df_renamed.columns
         assert "category" not in df_renamed.columns
 
-    def test_data_export(self):
-        """Test data export functionality via polars delegation"""
-        data = get_sample_data()
-        df = DocDataFrame(data)
+    def test_data_export(self, sample_data):
+        """Test data export functionality via dataframe delegation"""
+        df = DocDataFrame(sample_data)
 
         # Test conversion to polars
-        pl_df = df.to_polars()
+        pl_df = df.to_dataframe()
         assert isinstance(pl_df, pl.DataFrame)
         assert len(pl_df) == len(df)
 
-        # Test CSV export via delegation to polars write_csv
+        # Test CSV export via delegation to dataframe write_csv
         with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
             df.write_csv(tmp.name)
             # Verify file was created
@@ -195,12 +178,11 @@ class TestAutoDetection:
             df = DocDataFrame(data)
             assert False, "Should have raised ValueError"
         except ValueError as e:
-            assert "not found in data" in str(e)
+            assert "not a valid document column" in str(e)
 
-    def test_manual_override_works(self):
+    def test_manual_override_works(self, sample_data):
         """Test that manual document column specification still works"""
-        data = get_sample_data()
-        df = DocDataFrame(data, document_column="title")
+        df = DocDataFrame(sample_data, document_column="title")
 
         assert df.active_document_name == "title"
         assert "title" in df.document[0].lower()
@@ -209,9 +191,9 @@ class TestAutoDetection:
 class TestRealWorldData:
     """Test with real-world datasets"""
 
-    def test_tweet_dataset_loading(self):
+    def test_tweet_dataset_loading(self, tweet_data_path):
         """Test loading and processing tweet dataset"""
-        tweet_path = get_tweet_data_path()
+        tweet_path = tweet_data_path
 
         if os.path.exists(tweet_path):
             # Load using docframe.read_csv utility function instead
@@ -231,9 +213,9 @@ class TestRealWorldData:
             # Skip if data file not available
             pass
 
-    def test_auto_detection_on_tweet_data(self):
+    def test_auto_detection_on_tweet_data(self, tweet_data_path):
         """Test auto-detection on tweet dataset"""
-        tweet_path = get_tweet_data_path()
+        tweet_path = tweet_data_path
 
         if os.path.exists(tweet_path):
             # Load without specifying document column
@@ -247,40 +229,4 @@ class TestRealWorldData:
             pass
 
 
-def run_tests():
-    """Run all tests manually (for when pytest is not available)"""
-    import traceback
-
-    test_classes = [
-        TestDocDataFrame,
-        TestAutoDetection,
-        TestRealWorldData,
-    ]
-    total_tests = 0
-    passed_tests = 0
-
-    for test_class in test_classes:
-        print(f"\n=== {test_class.__name__} ===")
-        instance = test_class()
-
-        for method_name in dir(instance):
-            if method_name.startswith("test_"):
-                total_tests += 1
-                try:
-                    method = getattr(instance, method_name)
-                    method()
-                    print(f"✓ {method_name}")
-                    passed_tests += 1
-                except Exception as e:
-                    print(f"✗ {method_name}: {e}")
-                    traceback.print_exc()
-
-    print(f"\n=== Test Results ===")
-    print(f"Passed: {passed_tests}/{total_tests}")
-    print(f"Success rate: {passed_tests / total_tests * 100:.1f}%")
-
-    return passed_tests == total_tests
-
-
-if __name__ == "__main__":
-    run_tests()
+"""Pytest collects tests automatically; manual harness removed."""

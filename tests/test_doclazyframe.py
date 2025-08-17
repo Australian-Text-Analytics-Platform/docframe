@@ -13,12 +13,10 @@ class TestDocLazyFrame:
 
     def test_init_from_lazyframe(self):
         """Test initialization from polars LazyFrame"""
-        df = pl.DataFrame(
-            {
-                "document": ["Hello world", "This is a test"],
-                "author": ["Alice", "Bob"],
-            }
-        ).lazy()
+        df = pl.DataFrame({
+            "document": ["Hello world", "This is a test"],
+            "author": ["Alice", "Bob"],
+        }).lazy()
 
         doc_lf = DocLazyFrame(df, document_column="document")
         assert doc_lf.document_column == "document"
@@ -43,12 +41,10 @@ class TestDocLazyFrame:
 
     def test_collect_to_docdataframe(self):
         """Test collecting LazyFrame to DocDataFrame"""
-        df = pl.DataFrame(
-            {
-                "document": ["Hello world", "This is a test"],
-                "author": ["Alice", "Bob"],
-            }
-        ).lazy()
+        df = pl.DataFrame({
+            "document": ["Hello world", "This is a test"],
+            "author": ["Alice", "Bob"],
+        }).lazy()
 
         doc_lf = DocLazyFrame(df, document_column="document")
         doc_df = doc_lf.collect()
@@ -59,12 +55,10 @@ class TestDocLazyFrame:
 
     def test_to_docdataframe(self):
         """Test converting to DocDataFrame"""
-        df = pl.DataFrame(
-            {
-                "document": ["Hello world", "This is a test"],
-                "author": ["Alice", "Bob"],
-            }
-        ).lazy()
+        df = pl.DataFrame({
+            "document": ["Hello world", "This is a test"],
+            "author": ["Alice", "Bob"],
+        }).lazy()
 
         doc_lf = DocLazyFrame(df, document_column="document")
         doc_df = doc_lf.to_docdataframe()
@@ -74,12 +68,10 @@ class TestDocLazyFrame:
 
     def test_to_lazyframe(self):
         """Test converting to regular polars LazyFrame"""
-        df = pl.DataFrame(
-            {
-                "document": ["Hello world", "This is a test"],
-                "author": ["Alice", "Bob"],
-            }
-        ).lazy()
+        df = pl.DataFrame({
+            "document": ["Hello world", "This is a test"],
+            "author": ["Alice", "Bob"],
+        }).lazy()
 
         doc_lf = DocLazyFrame(df, document_column="document")
         lf = doc_lf.to_lazyframe()
@@ -92,13 +84,11 @@ class TestDocLazyFrame:
 
     def test_with_document_column(self):
         """Test changing document column"""
-        df = pl.DataFrame(
-            {
-                "text1": ["Hello world", "This is a test"],
-                "text2": ["Another text", "More content"],
-                "author": ["Alice", "Bob"],
-            }
-        ).lazy()
+        df = pl.DataFrame({
+            "text1": ["Hello world", "This is a test"],
+            "text2": ["Another text", "More content"],
+            "author": ["Alice", "Bob"],
+        }).lazy()
 
         doc_lf = DocLazyFrame(df, document_column="text1")
         doc_lf2 = doc_lf.with_document_column("text2")
@@ -108,12 +98,10 @@ class TestDocLazyFrame:
 
     def test_document_property(self):
         """Test document property returns expression"""
-        df = pl.DataFrame(
-            {
-                "document": ["Hello world", "This is a test"],
-                "author": ["Alice", "Bob"],
-            }
-        ).lazy()
+        df = pl.DataFrame({
+            "document": ["Hello world", "This is a test"],
+            "author": ["Alice", "Bob"],
+        }).lazy()
 
         doc_lf = DocLazyFrame(df, document_column="document")
         doc_expr = doc_lf.document
@@ -122,12 +110,10 @@ class TestDocLazyFrame:
 
     def test_serialization(self):
         """Test LazyFrame serialization"""
-        df = pl.DataFrame(
-            {
-                "document": ["Hello world", "This is a test"],
-                "author": ["Alice", "Bob"],
-            }
-        ).lazy()
+        df = pl.DataFrame({
+            "document": ["Hello world", "This is a test"],
+            "author": ["Alice", "Bob"],
+        }).lazy()
 
         doc_lf = DocLazyFrame(df, document_column="document")
 
@@ -142,13 +128,11 @@ class TestDocLazyFrame:
 
     def test_polars_method_delegation(self):
         """Test that polars LazyFrame methods work"""
-        df = pl.DataFrame(
-            {
-                "document": ["Hello world", "This is a test", "Another doc"],
-                "author": ["Alice", "Bob", "Charlie"],
-                "year": [2020, 2021, 2022],
-            }
-        ).lazy()
+        df = pl.DataFrame({
+            "document": ["Hello world", "This is a test", "Another doc"],
+            "author": ["Alice", "Bob", "Charlie"],
+            "year": [2020, 2021, 2022],
+        }).lazy()
 
         doc_lf = DocLazyFrame(df, document_column="document")
 
@@ -169,42 +153,36 @@ class TestDocLazyFrame:
 
     def test_repr_and_str(self):
         """Test string representations"""
-        df = pl.DataFrame(
-            {
-                "document": ["Hello world", "This is a test"],
-                "author": ["Alice", "Bob"],
-            }
-        ).lazy()
+        df = pl.DataFrame({
+            "document": ["Hello world", "This is a test"],
+            "author": ["Alice", "Bob"],
+        }).lazy()
 
         doc_lf = DocLazyFrame(df, document_column="document")
 
         repr_str = repr(doc_lf)
         assert "DocLazyFrame" in repr_str
-        assert "document_column='document'" in repr_str
+        assert "document column: document" in repr_str
 
         str_str = str(doc_lf)
-        assert "Document column:" in str_str
+        assert "document column:" in str_str
 
     def test_error_handling(self):
         """Test error handling for invalid inputs"""
-        df = pl.DataFrame(
-            {
-                "document": ["Hello world", "This is a test"],
-                "author": ["Alice", "Bob"],
-            }
-        ).lazy()
+        df = pl.DataFrame({
+            "document": ["Hello world", "This is a test"],
+            "author": ["Alice", "Bob"],
+        }).lazy()
 
         # Test invalid document column
-        with pytest.raises(ValueError, match="Document column 'nonexistent' not found"):
+        with pytest.raises(ValueError, match="not a valid document column"):
             DocLazyFrame(df, document_column="nonexistent")
 
         # Test non-string document column
-        df_numeric = pl.DataFrame(
-            {
-                "numbers": [1, 2, 3],
-                "text": ["a", "b", "c"],
-            }
-        ).lazy()
+        df_numeric = pl.DataFrame({
+            "numbers": [1, 2, 3],
+            "text": ["a", "b", "c"],
+        }).lazy()
 
         with pytest.raises(ValueError, match="is not a string column"):
             DocLazyFrame(df_numeric, document_column="numbers")

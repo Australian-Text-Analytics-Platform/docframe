@@ -11,14 +11,6 @@ import pytest
 
 def test_document_column_management():
     """Test document column management methods"""
-    import os
-    import sys
-
-    # Add parent directory to path for importing docframe
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-    import polars as pl
-
     from docframe import DocDataFrame
 
     # Create test data
@@ -39,7 +31,7 @@ def test_document_column_management():
     assert df.active_document_name == "content"  # Original unchanged
 
     # Test set_document with invalid column
-    with pytest.raises(ValueError, match="Document column 'nonexistent' not found"):
+    with pytest.raises(ValueError, match="not a valid document column"):
         df.set_document("nonexistent")
 
     # Test set_document with non-string column
@@ -61,12 +53,6 @@ def test_document_column_management():
 
 def test_read_csv_utility():
     """Test the read_csv utility function"""
-    import os
-    import sys
-
-    # Add parent directory to path for importing docframe
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
     import polars as pl
 
     import docframe
@@ -113,7 +99,7 @@ def test_read_csv_utility():
             warnings.simplefilter("always")
             df4 = docframe.read_csv(csv_path, document_column="nonexistent")
             assert len(w) == 1
-            assert "not found" in str(w[-1].message)
+            assert "Could not create DocDataFrame" in str(w[-1].message)
             assert isinstance(df4, pl.DataFrame)
             assert not hasattr(df4, "active_document_name")
 
@@ -122,7 +108,7 @@ def test_read_csv_utility():
             warnings.simplefilter("always")
             df5 = docframe.read_csv(csv_path, document_column="id")
             assert len(w) == 1
-            assert "not a string column" in str(w[-1].message)
+            assert "Could not create DocDataFrame" in str(w[-1].message)
             assert isinstance(df5, pl.DataFrame)
 
         print("✅ read_csv utility tests passed")
@@ -134,12 +120,6 @@ def test_read_csv_utility():
 
 def test_concat_documents():
     """Test concatenating DocDataFrames"""
-    import os
-    import sys
-
-    # Add parent directory to path for importing docframe
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
     from docframe import DocDataFrame, concat_documents
 
     # Create test DocDataFrames
@@ -155,7 +135,7 @@ def test_concat_documents():
     result = concat_documents([df1, df2], how="vertical")
     assert len(result) == 4
     assert result.active_document_name == "text"
-    assert result.to_polars()["text"].to_list() == ["doc1", "doc2", "doc3", "doc4"]
+    assert result.to_dataframe()["text"].to_list() == ["doc1", "doc2", "doc3", "doc4"]
 
     # Test with different document column names (should fail)
     df3 = DocDataFrame(
@@ -170,12 +150,6 @@ def test_concat_documents():
 
 def test_info_function():
     """Test the info function"""
-    import os
-    import sys
-
-    # Add parent directory to path for importing docframe
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
     import docframe
 
     info_text = docframe.info()

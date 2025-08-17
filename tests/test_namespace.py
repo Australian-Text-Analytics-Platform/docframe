@@ -2,13 +2,7 @@
 Test the new polars text namespace functionality
 """
 
-import os
-import sys
-
 import polars as pl
-
-# Add the project path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 # Import docframe to trigger namespace registration
 import docframe
@@ -46,12 +40,10 @@ def test_series_namespace():
 
 def test_dataframe_namespace():
     """Test that df.text works"""
-    df = pl.DataFrame(
-        {
-            "text": ["Hello World!", "This is a test.", "Another example."],
-            "id": [1, 2, 3],
-        }
-    )
+    df = pl.DataFrame({
+        "text": ["Hello World!", "This is a test.", "Another example."],
+        "id": [1, 2, 3],
+    })
 
     # Test dataframe namespace
     result = df.text.word_count("text")
@@ -65,12 +57,10 @@ def test_document_shortcut():
     """Test df.document.text works with DocDataFrame"""
     from docframe import DocDataFrame
 
-    df = DocDataFrame(
-        {
-            "text": ["Hello World!", "This is a test.", "Another example."],
-            "id": [1, 2, 3],
-        }
-    )
+    df = DocDataFrame({
+        "text": ["Hello World!", "This is a test.", "Another example."],
+        "id": [1, 2, 3],
+    })
 
     # Test document shortcut with text namespace
     word_counts = df.document.text.word_count()
@@ -85,17 +75,15 @@ def test_namespace_conversions():
     from docframe import DocDataFrame
 
     # Test DataFrame.text.to_docdataframe()
-    regular_df = pl.DataFrame(
-        {
-            "article": [
-                "The quick brown fox",
-                "Jumps over the lazy dog",
-                "Pack my box with five dozen liquor jugs",
-            ],
-            "author": ["Alice", "Bob", "Charlie"],
-            "year": [2020, 2021, 2022],
-        }
-    )
+    regular_df = pl.DataFrame({
+        "article": [
+            "The quick brown fox",
+            "Jumps over the lazy dog",
+            "Pack my box with five dozen liquor jugs",
+        ],
+        "author": ["Alice", "Bob", "Charlie"],
+        "year": [2020, 2021, 2022],
+    })
 
     doc_df = regular_df.text.to_docdataframe(document_column="article")
     print("DataFrame namespace conversion test:")
