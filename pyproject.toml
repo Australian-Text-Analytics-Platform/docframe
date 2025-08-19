@@ -15,6 +15,7 @@ dependencies = [
     "scikit-learn>=1.6.1",
     "umap>=0.1.1",
     "bertopic>=0.17.3",
+    "torch>=2.8.0",
 ]
 
 [build-system]
