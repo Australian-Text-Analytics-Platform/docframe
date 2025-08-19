@@ -4,9 +4,28 @@ Text processing utilities
 
 import re
 import string
-from typing import Dict, List, Optional
+from functools import reduce
+from typing import Any, Dict, List, Optional, Union
 
+import numpy as np
 import polars as pl
+
+try:  # Lazy optional BERTopic dependency
+    import importlib
+
+    _bertopic_mod = importlib.import_module("bertopic")  # noqa: F401
+    _HAS_BERTOPIC = True
+except Exception:  # pragma: no cover
+    _HAS_BERTOPIC = False
+from sklearn.preprocessing import MinMaxScaler
+
+try:  # Optional dependency: if unavailable, we fall back to PCA
+    from umap import UMAP  # type: ignore
+
+    _HAS_UMAP = True
+except Exception:  # pragma: no cover - environment without umap
+    UMAP = None  # type: ignore
+    _HAS_UMAP = False
 
 
 def simple_tokenize(
@@ -198,13 +217,11 @@ def _calculate_log_likelihood_and_effect_size(
     df = pl.DataFrame(data)
 
     # Calculate corpus-level statistics
-    df = df.with_columns(
-        [
-            (pl.col("freq_corpus_0") + pl.col("freq_corpus_1")).alias("total_freq"),
-            pl.col("freq_corpus_0").sum().alias("corpus_0_total"),
-            pl.col("freq_corpus_1").sum().alias("corpus_1_total"),
-        ]
-    )
+    df = df.with_columns([
+        (pl.col("freq_corpus_0") + pl.col("freq_corpus_1")).alias("total_freq"),
+        pl.col("freq_corpus_0").sum().alias("corpus_0_total"),
+        pl.col("freq_corpus_1").sum().alias("corpus_1_total"),
+    ])
 
     # Calculate grand total
     grand_total = df.select(
@@ -212,163 +229,147 @@ def _calculate_log_likelihood_and_effect_size(
     ).item()
 
     # Calculate expected frequencies
-    df = df.with_columns(
-        [
-            (pl.col("total_freq") * pl.col("corpus_0_total") / grand_total).alias(
-                "expected_0"
-            ),
-            (pl.col("total_freq") * pl.col("corpus_1_total") / grand_total).alias(
-                "expected_1"
-            ),
-        ]
-    )
+    df = df.with_columns([
+        (pl.col("total_freq") * pl.col("corpus_0_total") / grand_total).alias(
+            "expected_0"
+        ),
+        (pl.col("total_freq") * pl.col("corpus_1_total") / grand_total).alias(
+            "expected_1"
+        ),
+    ])
 
     # Calculate log likelihood ratios with safe division (avoid log(0))
-    df = df.with_columns(
-        [
-            # Use observed * log(observed/expected) formula for log likelihood
-            pl.when(pl.col("freq_corpus_0") > 0)
-            .then(
-                pl.col("freq_corpus_0")
-                * (
-                    pl.col("freq_corpus_0")
-                    / pl.max_horizontal("expected_0", pl.lit(1e-10))
-                ).log()
-            )
-            .otherwise(0.0)
-            .alias("ll_0"),
-            pl.when(pl.col("freq_corpus_1") > 0)
-            .then(
-                pl.col("freq_corpus_1")
-                * (
-                    pl.col("freq_corpus_1")
-                    / pl.max_horizontal("expected_1", pl.lit(1e-10))
-                ).log()
-            )
-            .otherwise(0.0)
-            .alias("ll_1"),
-        ]
-    )
+    df = df.with_columns([
+        # Use observed * log(observed/expected) formula for log likelihood
+        pl.when(pl.col("freq_corpus_0") > 0)
+        .then(
+            pl.col("freq_corpus_0")
+            * (
+                pl.col("freq_corpus_0") / pl.max_horizontal("expected_0", pl.lit(1e-10))
+            ).log()
+        )
+        .otherwise(0.0)
+        .alias("ll_0"),
+        pl.when(pl.col("freq_corpus_1") > 0)
+        .then(
+            pl.col("freq_corpus_1")
+            * (
+                pl.col("freq_corpus_1") / pl.max_horizontal("expected_1", pl.lit(1e-10))
+            ).log()
+        )
+        .otherwise(0.0)
+        .alias("ll_1"),
+    ])
 
     # Calculate G2 log likelihood statistic
-    df = df.with_columns(
-        [(2 * (pl.col("ll_0") + pl.col("ll_1"))).alias("log_likelihood_llv")]
-    )
+    df = df.with_columns([
+        (2 * (pl.col("ll_0") + pl.col("ll_1"))).alias("log_likelihood_llv")
+    ])
 
     # Calculate Bayes Factor (BIC)
     dof = 1  # degrees of freedom for 2x2 contingency table
-    df = df.with_columns(
-        [
-            (pl.col("log_likelihood_llv") - (dof * pl.lit(grand_total).log())).alias(
-                "bayes_factor_bic"
-            )
-        ]
-    )
+    df = df.with_columns([
+        (pl.col("log_likelihood_llv") - (dof * pl.lit(grand_total).log())).alias(
+            "bayes_factor_bic"
+        )
+    ])
 
     # Calculate Effect Size for Log Likelihood (ELL)
-    df = df.with_columns(
-        [pl.min_horizontal("expected_0", "expected_1").alias("min_expected")]
-    )
+    df = df.with_columns([
+        pl.min_horizontal("expected_0", "expected_1").alias("min_expected")
+    ])
 
-    df = df.with_columns(
-        [
-            pl.when(pl.col("min_expected") > 0)
-            .then(
-                pl.col("log_likelihood_llv")
-                / (grand_total * pl.max_horizontal("min_expected", pl.lit(1e-10)).log())
-            )
-            .otherwise(0.0)
-            .alias("effect_size_ell")
-        ]
-    )
+    df = df.with_columns([
+        pl.when(pl.col("min_expected") > 0)
+        .then(
+            pl.col("log_likelihood_llv")
+            / (grand_total * pl.max_horizontal("min_expected", pl.lit(1e-10)).log())
+        )
+        .otherwise(0.0)
+        .alias("effect_size_ell")
+    ])
 
     # Add significance indicators based on critical values
-    df = df.with_columns(
-        [
-            pl.when(pl.col("log_likelihood_llv") >= 15.13)
-            .then(pl.lit("****"))  # p < 0.0001
-            .when(pl.col("log_likelihood_llv") >= 10.83)
-            .then(pl.lit("***"))  # p < 0.001
-            .when(pl.col("log_likelihood_llv") >= 6.63)
-            .then(pl.lit("**"))  # p < 0.01
-            .when(pl.col("log_likelihood_llv") >= 3.84)
-            .then(pl.lit("*"))  # p < 0.05
-            .otherwise(pl.lit(""))  # not significant
-            .alias("significance")
-        ]
-    )
+    df = df.with_columns([
+        pl.when(pl.col("log_likelihood_llv") >= 15.13)
+        .then(pl.lit("****"))  # p < 0.0001
+        .when(pl.col("log_likelihood_llv") >= 10.83)
+        .then(pl.lit("***"))  # p < 0.001
+        .when(pl.col("log_likelihood_llv") >= 6.63)
+        .then(pl.lit("**"))  # p < 0.01
+        .when(pl.col("log_likelihood_llv") >= 3.84)
+        .then(pl.lit("*"))  # p < 0.05
+        .otherwise(pl.lit(""))  # not significant
+        .alias("significance")
+    ])
 
     # Return only the key statistical measures, with token as index
-    result = df.select(
-        [
-            "token",
-            "freq_corpus_0",  # O1 - observed frequency in corpus 1
-            "freq_corpus_1",  # O2 - observed frequency in corpus 2
-            "expected_0",  # Expected frequency in corpus 1
-            "expected_1",  # Expected frequency in corpus 2
-            "corpus_0_total",  # Total tokens in corpus 1
-            "corpus_1_total",  # Total tokens in corpus 2
-            "log_likelihood_llv",
-            "bayes_factor_bic",
-            "effect_size_ell",
-            "significance",
-        ]
-    )
+    result = df.select([
+        "token",
+        "freq_corpus_0",  # O1 - observed frequency in corpus 1
+        "freq_corpus_1",  # O2 - observed frequency in corpus 2
+        "expected_0",  # Expected frequency in corpus 1
+        "expected_1",  # Expected frequency in corpus 2
+        "corpus_0_total",  # Total tokens in corpus 1
+        "corpus_1_total",  # Total tokens in corpus 2
+        "log_likelihood_llv",
+        "bayes_factor_bic",
+        "effect_size_ell",
+        "significance",
+    ])
 
     # Add percentage columns and additional statistics
-    result = result.with_columns(
-        [
-            # %1 and %2 - percentage of token in each corpus
-            (pl.col("freq_corpus_0") / pl.col("corpus_0_total") * 100).alias(
-                "percent_corpus_0"
-            ),
-            (pl.col("freq_corpus_1") / pl.col("corpus_1_total") * 100).alias(
-                "percent_corpus_1"
-            ),
-            # %DIFF - percentage difference between corpora
+    result = result.with_columns([
+        # %1 and %2 - percentage of token in each corpus
+        (pl.col("freq_corpus_0") / pl.col("corpus_0_total") * 100).alias(
+            "percent_corpus_0"
+        ),
+        (pl.col("freq_corpus_1") / pl.col("corpus_1_total") * 100).alias(
+            "percent_corpus_1"
+        ),
+        # %DIFF - percentage difference between corpora
+        (
+            (pl.col("freq_corpus_0") / pl.col("corpus_0_total"))
+            - (pl.col("freq_corpus_1") / pl.col("corpus_1_total"))
+        ).alias("percent_diff"),
+        # Relative Risk (RRisk) - ratio of proportions
+        pl.when(pl.col("freq_corpus_1") > 0)
+        .then(
+            (pl.col("freq_corpus_0") / pl.col("corpus_0_total"))
+            / (pl.col("freq_corpus_1") / pl.col("corpus_1_total"))
+        )
+        .otherwise(None)  # Use None instead of inf for JSON serialization
+        .alias("relative_risk"),
+        # Log Ratio - log of relative frequencies
+        pl.when((pl.col("freq_corpus_0") > 0) & (pl.col("freq_corpus_1") > 0))
+        .then(
             (
                 (pl.col("freq_corpus_0") / pl.col("corpus_0_total"))
-                - (pl.col("freq_corpus_1") / pl.col("corpus_1_total"))
-            ).alias("percent_diff"),
-            # Relative Risk (RRisk) - ratio of proportions
-            pl.when(pl.col("freq_corpus_1") > 0)
-            .then(
-                (pl.col("freq_corpus_0") / pl.col("corpus_0_total"))
                 / (pl.col("freq_corpus_1") / pl.col("corpus_1_total"))
+            ).log()
+        )
+        .otherwise(None)  # Use None instead of 0.0 for consistency
+        .alias("log_ratio"),
+        # Odds Ratio - odds of occurrence in corpus 1 vs corpus 2
+        pl.when(
+            (pl.col("freq_corpus_0") > 0)
+            & (pl.col("freq_corpus_1") > 0)
+            & (pl.col("corpus_1_total") > pl.col("freq_corpus_1"))
+            & (pl.col("corpus_0_total") > pl.col("freq_corpus_0"))
+        )
+        .then(
+            (
+                pl.col("freq_corpus_0")
+                * (pl.col("corpus_1_total") - pl.col("freq_corpus_1"))
             )
-            .otherwise(None)  # Use None instead of inf for JSON serialization
-            .alias("relative_risk"),
-            # Log Ratio - log of relative frequencies
-            pl.when((pl.col("freq_corpus_0") > 0) & (pl.col("freq_corpus_1") > 0))
-            .then(
-                (
-                    (pl.col("freq_corpus_0") / pl.col("corpus_0_total"))
-                    / (pl.col("freq_corpus_1") / pl.col("corpus_1_total"))
-                ).log()
+            / (
+                pl.col("freq_corpus_1")
+                * (pl.col("corpus_0_total") - pl.col("freq_corpus_0"))
             )
-            .otherwise(None)  # Use None instead of 0.0 for consistency
-            .alias("log_ratio"),
-            # Odds Ratio - odds of occurrence in corpus 1 vs corpus 2
-            pl.when(
-                (pl.col("freq_corpus_0") > 0)
-                & (pl.col("freq_corpus_1") > 0)
-                & (pl.col("corpus_1_total") > pl.col("freq_corpus_1"))
-                & (pl.col("corpus_0_total") > pl.col("freq_corpus_0"))
-            )
-            .then(
-                (
-                    pl.col("freq_corpus_0")
-                    * (pl.col("corpus_1_total") - pl.col("freq_corpus_1"))
-                )
-                / (
-                    pl.col("freq_corpus_1")
-                    * (pl.col("corpus_0_total") - pl.col("freq_corpus_0"))
-                )
-            )
-            .otherwise(None)  # Use None instead of inf for JSON serialization
-            .alias("odds_ratio"),
-        ]
-    )
+        )
+        .otherwise(None)  # Use None instead of inf for JSON serialization
+        .alias("odds_ratio"),
+    ])
 
     return result
 
@@ -523,34 +524,7 @@ def compute_token_frequencies(
             # If statistical calculation fails, create empty stats DataFrame with all required columns
             stats_data = []
             for token in sorted(all_tokens):
-                stats_data.append(
-                    {
-                        "token": token,
-                        "freq_corpus_0": 0,
-                        "freq_corpus_1": 0,
-                        "expected_0": 0.0,
-                        "expected_1": 0.0,
-                        "corpus_0_total": 0,
-                        "corpus_1_total": 0,
-                        "percent_corpus_0": 0.0,
-                        "percent_corpus_1": 0.0,
-                        "percent_diff": 0.0,
-                        "log_likelihood_llv": 0.0,
-                        "bayes_factor_bic": 0.0,
-                        "effect_size_ell": 0.0,
-                        "relative_risk": None,
-                        "log_ratio": None,
-                        "odds_ratio": None,
-                        "significance": "",
-                    }
-                )
-            stats = pl.DataFrame(stats_data)
-    else:
-        # Create empty stats DataFrame for non-comparison cases with all required columns
-        stats_data = []
-        for token in sorted(all_tokens):
-            stats_data.append(
-                {
+                stats_data.append({
                     "token": token,
                     "freq_corpus_0": 0,
                     "freq_corpus_1": 0,
@@ -568,8 +542,195 @@ def compute_token_frequencies(
                     "log_ratio": None,
                     "odds_ratio": None,
                     "significance": "",
-                }
-            )
+                })
+            stats = pl.DataFrame(stats_data)
+    else:
+        # Create empty stats DataFrame for non-comparison cases with all required columns
+        stats_data = []
+        for token in sorted(all_tokens):
+            stats_data.append({
+                "token": token,
+                "freq_corpus_0": 0,
+                "freq_corpus_1": 0,
+                "expected_0": 0.0,
+                "expected_1": 0.0,
+                "corpus_0_total": 0,
+                "corpus_1_total": 0,
+                "percent_corpus_0": 0.0,
+                "percent_corpus_1": 0.0,
+                "percent_diff": 0.0,
+                "log_likelihood_llv": 0.0,
+                "bayes_factor_bic": 0.0,
+                "effect_size_ell": 0.0,
+                "relative_risk": None,
+                "log_ratio": None,
+                "odds_ratio": None,
+                "significance": "",
+            })
         stats = pl.DataFrame(stats_data)
 
     return result, stats
+
+
+def topic_visualization(
+    corpora: List[List[str]],
+    min_topic_size: int = 5,
+    use_ctfidf: bool = False,
+    custom_labels: Union[bool, str] = False,
+    random_state: int = 42,
+) -> Dict[str, Any]:
+    """
+    Fit a BERTopic model on multiple corpora and return data needed for a frontend
+    inter-topic distance visualization (no Plotly objects created here).
+
+    Per-topic size semantics (UPDATED):
+      For each topic we now return `size` as a list whose i-th element is the
+      number of documents assigned to that topic coming from the i-th corpus
+      in the input `corpora` list. Example: two corpora -> size = [N_from_corpus0, M_from_corpus1].
+
+    Returns dict with:
+      - corpus_sizes: list[int]
+      - topics: list[ { id, label, size: List[int], total_size, x, y } ]
+      - per_corpus_topic_counts: list[dict]
+      - assignments: list[list[int]]
+      - meta: auxiliary info
+    """
+    if not corpora or any(c is None for c in corpora):
+        raise ValueError("'corpora' must be a non-empty list of document lists.")
+
+    corpus_sizes = [len(c) for c in corpora]
+    if any(sz == 0 for sz in corpus_sizes):
+        raise ValueError("All corpora must contain at least one document.")
+
+    # Merge corpora for fitting
+    full_list = reduce(lambda x, y: x + y, corpora)
+
+    if not _HAS_BERTOPIC:
+        raise ImportError(
+            "BERTopic is required for topic_visualization but is not installed."
+        )
+
+    # Local imports to minimize import cost for users not using BERTopic functions
+    from bertopic import BERTopic  # type: ignore
+    from bertopic._utils import select_topic_representation  # type: ignore
+
+    # Fit model (silence verbose)
+    topic_model = BERTopic(min_topic_size=min_topic_size, verbose=False)
+    topic_model.fit(full_list)
+
+    # Transform each corpus separately (returns (topics, probs))
+    transformed = [topic_model.transform(corpus) for corpus in corpora]
+    assignments = [t[0] for t in transformed]
+
+    # Build per-corpus topic count dictionaries
+    per_corpus_topic_counts: List[Dict[int, int]] = []
+    for topic_ids in assignments:
+        counts: Dict[int, int] = {}
+        for tid in topic_ids:
+            counts[tid] = counts.get(tid, 0) + 1
+        per_corpus_topic_counts.append(counts)
+
+    # Prepare topic list excluding outlier (-1)
+    freq_df = topic_model.get_topic_freq()
+    topic_ids = [int(t) for t in freq_df[freq_df.Topic != -1].Topic.tolist()]
+
+    # Topic labels
+    if isinstance(custom_labels, str):  # aspect-based labels
+        words_nested = [
+            [[str(t), None]] + topic_model.topic_aspects_[custom_labels][t]
+            for t in topic_ids
+        ]
+        labels = ["_".join([w[0] for w in wn[:4]]) for wn in words_nested]
+        labels = [lbl if len(lbl) < 30 else lbl[:27] + "..." for lbl in labels]
+    elif custom_labels and getattr(topic_model, "custom_labels_", None) is not None:
+        labels = [
+            topic_model.custom_labels_[t + topic_model._outliers] for t in topic_ids
+        ]
+    else:
+        labels = [
+            " | ".join([w[0] for w in topic_model.get_topic(t)[:5]]) for t in topic_ids
+        ]
+
+    # Extract base embeddings (topic embeddings or c-TF-IDF)
+    all_topics_sorted = sorted(list(topic_model.get_topics().keys()))
+    indices = (
+        np.array([all_topics_sorted.index(t) for t in topic_ids])
+        if topic_ids
+        else np.array([])
+    )
+
+    embeddings, c_tfidf_used = select_topic_representation(  # type: ignore
+        topic_model.c_tf_idf_,
+        topic_model.topic_embeddings_,
+        use_ctfidf=use_ctfidf,
+        output_ndarray=True,
+    )
+    if len(indices) > 0:
+        embeddings = embeddings[indices]
+    else:
+        embeddings = np.zeros((0, 2))
+
+    # Dimensionality reduction to 2D
+    coords: np.ndarray
+    if embeddings.shape[0] == 0:
+        coords = embeddings
+    elif embeddings.shape[0] == 1:  # Single topic
+        coords = np.array([[0.0, 0.0]])
+    else:
+        if _HAS_UMAP:
+            if c_tfidf_used:
+                emb_norm = MinMaxScaler().fit_transform(embeddings)
+                coords = UMAP(
+                    n_neighbors=2,
+                    n_components=2,
+                    metric="hellinger",
+                    random_state=random_state,
+                ).fit_transform(emb_norm)
+            else:
+                coords = UMAP(
+                    n_neighbors=2,
+                    n_components=2,
+                    metric="cosine",
+                    random_state=random_state,
+                ).fit_transform(embeddings)
+        else:  # Fallback PCA projection for deterministic tests without umap
+            from sklearn.decomposition import PCA
+
+            comps = min(2, embeddings.shape[1])
+            proj = PCA(n_components=comps, random_state=random_state).fit_transform(
+                embeddings
+            )
+            if comps == 1:
+                coords = np.column_stack([proj[:, 0], np.zeros_like(proj[:, 0])])
+            else:
+                coords = proj
+
+    # Assemble topic data with per-corpus size list
+    topics_payload = []
+    for i, tid in enumerate(topic_ids):
+        per_corpus_sizes = [
+            per_corpus_topic_counts[j].get(tid, 0)
+            for j in range(len(per_corpus_topic_counts))
+        ]
+        topics_payload.append({
+            "id": tid,
+            "label": labels[i],
+            # size now list aligned with corpora order
+            "size": per_corpus_sizes,
+            "total_size": int(sum(per_corpus_sizes)),
+            "x": float(coords[i, 0]),
+            "y": float(coords[i, 1]),
+        })
+
+    return {
+        "corpus_sizes": corpus_sizes,
+        "topics": topics_payload,
+        "per_corpus_topic_counts": per_corpus_topic_counts,
+        "assignments": assignments,
+        "meta": {
+            "used_ctfidf": bool(use_ctfidf),
+            "embeddings_from_ctfidf": bool(c_tfidf_used),
+            "min_topic_size": min_topic_size,
+            "total_topics_incl_outlier": int(freq_df.shape[0]),
+        },
+    }

@@ -1,6 +1,5 @@
 """Tests for text_utils module"""
 
-import numpy as np
 import polars as pl
 import pytest
 
@@ -128,3 +127,77 @@ class TestComputeTokenFrequencies:
             and "world" in freqs["case"]
             and "peace" in freqs["case"]
         )
+
+
+class TestTopicVisualization:
+    """Tests for topic_visualization utility"""
+
+    def test_basic_two_corpora(self):
+        import importlib
+        if importlib.util.find_spec("bertopic") is None:
+            import pytest
+            pytest.skip("BERTopic not installed")
+        from docframe.core.text_utils import topic_visualization
+
+        corpus1 = [
+            "transport policy announcement",
+            "new infrastructure funding for roads",
+            "public transport improvements planned",
+        ]
+    corpus2 = [
+            "health policy update and hospital funding",
+            "new health infrastructure and services",
+            "public health announcement",
+        ]
+    result = topic_visualization([corpus1, corpus2], min_topic_size=2)
+        # Basic structure checks
+        assert set(result.keys()) == {
+            "corpus_sizes",
+            "topics",
+            "per_corpus_topic_counts",
+            "assignments",
+            "meta",
+        }
+        assert result["corpus_sizes"] == [len(corpus1), len(corpus2)]
+        # assignments length per corpus
+        assert [len(a) for a in result["assignments"]] == [len(corpus1), len(corpus2)]
+        # Each topic size list aligns with corpora count
+        for t in result["topics"]:
+            assert isinstance(t["size"], list) and len(t["size"]) == 2
+            assert t["total_size"] == sum(t["size"])
+            assert all(isinstance(x, int) and x >= 0 for x in t["size"])
+            # Coordinates present
+            assert isinstance(t["x"], float) and isinstance(t["y"], float)
+        # Ensure at least one topic produced
+        assert len(result["topics"]) >= 1
+
+    def test_invalid_input(self):
+        import importlib
+        if importlib.util.find_spec("bertopic") is None:
+            import pytest
+            pytest.skip("BERTopic not installed")
+        from docframe.core.text_utils import topic_visualization
+        import pytest
+
+        with pytest.raises(ValueError):
+            topic_visualization([])
+        with pytest.raises(ValueError):
+            topic_visualization([["doc"], []])  # empty corpus invalid
+
+    def test_custom_min_topic_size(self):
+        import importlib
+        if importlib.util.find_spec("bertopic") is None:
+            import pytest
+            pytest.skip("BERTopic not installed")
+        from docframe.core.text_utils import topic_visualization
+        # Use overlapping vocabulary to help clustering
+        corpus1 = ["alpha beta gamma", "alpha beta", "beta gamma"]
+        corpus2 = ["alpha beta delta", "beta delta", "delta alpha beta"]
+        result = topic_visualization([corpus1, corpus2], min_topic_size=2)
+        # All topics should report size lists of length 2
+        assert all(len(t["size"]) == 2 for t in result["topics"])
+        # Sum of per-corpus topic sizes equals corpus sizes when excluding outlier (-1)
+        assigned_counts = [sum(t["size"][i] for t in result["topics"]) for i in range(2)]
+        # Account for possible outliers: assigned_counts <= corpus_sizes
+        for i, total in enumerate(assigned_counts):
+            assert total <= result["corpus_sizes"][i]
