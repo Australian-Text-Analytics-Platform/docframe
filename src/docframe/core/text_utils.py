@@ -4,11 +4,18 @@ Text processing utilities
 
 import re
 import string
+import warnings
 from functools import reduce
 from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import polars as pl
+from sklearn.preprocessing import MinMaxScaler
+
+# Suppress sklearn deprecation warnings
+warnings.filterwarnings(
+    "ignore", message="'force_all_finite' was renamed to 'ensure_all_finite'"
+)
 
 try:  # Lazy optional BERTopic dependency (avoid heavy import at module load)
     import importlib.util
@@ -16,7 +23,6 @@ try:  # Lazy optional BERTopic dependency (avoid heavy import at module load)
     _HAS_BERTOPIC = importlib.util.find_spec("bertopic") is not None
 except Exception:  # pragma: no cover
     _HAS_BERTOPIC = False
-from sklearn.preprocessing import MinMaxScaler
 
 # Detect UMAP availability without importing it (to avoid heavy deps at import time)
 try:  # Optional dependency: if unavailable, we fall back to PCA
@@ -676,26 +682,58 @@ def topic_visualization(
         coords = embeddings
     elif embeddings.shape[0] == 1:  # Single topic
         coords = np.array([[0.0, 0.0]])
+    elif embeddings.shape[0] <= 15:  # Use PCA for small datasets to avoid UMAP issues
+        # Use PCA for small datasets to avoid UMAP scipy.linalg.eigh issues
+        from sklearn.decomposition import PCA
+
+        comps = min(2, embeddings.shape[1])
+        proj = PCA(n_components=comps, random_state=random_state).fit_transform(
+            embeddings
+        )
+        if comps == 1:
+            coords = np.column_stack([proj[:, 0], np.zeros_like(proj[:, 0])])
+        else:
+            coords = proj
     else:
         if _HAS_UMAP:
             # Lazy import here to avoid numba/llvmlite initialization during module import
             from umap import UMAP  # type: ignore
 
-            if c_tfidf_used:
-                emb_norm = MinMaxScaler().fit_transform(embeddings)
-                coords = UMAP(
-                    n_neighbors=2,
-                    n_components=2,
-                    metric="hellinger",
-                    random_state=random_state,
-                ).fit_transform(emb_norm)
-            else:
-                coords = UMAP(
-                    n_neighbors=2,
-                    n_components=2,
-                    metric="cosine",
-                    random_state=random_state,
-                ).fit_transform(embeddings)
+            # Adjust n_neighbors based on data size to avoid scipy.linalg.eigh issues
+            # UMAP needs n_neighbors < n_samples and sufficient samples for embedding
+            n_samples = embeddings.shape[0]
+            # Use stricter calculation: n_neighbors must be < n_samples - 1
+            n_neighbors = max(2, min(15, n_samples - 2))
+
+            try:
+                if c_tfidf_used:
+                    emb_norm = MinMaxScaler().fit_transform(embeddings)
+                    coords = UMAP(
+                        n_neighbors=n_neighbors,
+                        n_components=2,
+                        metric="hellinger",
+                        random_state=random_state,
+                    ).fit_transform(emb_norm)
+                else:
+                    coords = UMAP(
+                        n_neighbors=n_neighbors,
+                        n_components=2,
+                        metric="cosine",
+                        random_state=random_state,
+                    ).fit_transform(embeddings)
+            except (TypeError, ValueError, RuntimeError) as e:
+                # Fallback to PCA if UMAP fails (including scipy.linalg.eigh errors)
+                print(f"UMAP failed with error: {e}. Falling back to PCA.")
+                from sklearn.decomposition import PCA
+
+                comps = min(2, embeddings.shape[1])
+                proj = PCA(n_components=comps, random_state=random_state).fit_transform(
+                    embeddings
+                )
+                if comps == 1:
+                    coords = np.column_stack([proj[:, 0], np.zeros_like(proj[:, 0])])
+                else:
+                    coords = proj
         else:  # Fallback PCA projection for deterministic tests without umap
             from sklearn.decomposition import PCA
 

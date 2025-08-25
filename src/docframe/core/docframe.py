@@ -187,7 +187,14 @@ class _DocumentColumnMixin:
             raise ValueError("No document column set for serialization")
 
         # Unified serialization: always {'metadata': {...}, 'data': ...}
-        data_json = self._df.serialize(format="json")  # type: ignore[attr-defined]
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="'json' serialization format of LazyFrame is deprecated",
+            )
+            data_json = self._df.serialize(format="json")  # type: ignore[attr-defined]
         if isinstance(self, DocDataFrame):
             type_label = "DocDataFrame"
         elif isinstance(self, DocLazyFrame):

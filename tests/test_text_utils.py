@@ -1,9 +1,19 @@
 """Tests for text_utils module"""
 
+import warnings
+
 import polars as pl
 import pytest
 
 import docframe as dp
+
+# Suppress external library warnings
+warnings.filterwarnings(
+    "ignore", message="Importing 'parser.split_arg_string' is deprecated"
+)
+warnings.filterwarnings(
+    "ignore", message="'force_all_finite' was renamed to 'ensure_all_finite'"
+)
 
 
 class TestComputeTokenFrequencies:
@@ -138,15 +148,34 @@ class TestTopicVisualization:
             pytest.skip("BERTopic not installed")
         from docframe.core.text_utils import topic_visualization
 
+        # Use larger corpora to avoid UMAP issues with small datasets
         corpus1 = [
-            "transport policy announcement",
-            "new infrastructure funding for roads",
-            "public transport improvements planned",
+            "transport policy announcement for new rail system",
+            "new infrastructure funding for roads and highways",
+            "public transport improvements planned across city",
+            "government announces major transport investment program",
+            "railway infrastructure development project launched",
+            "bus network expansion to serve rural areas",
+            "metro line construction begins this summer",
+            "transport minister outlines five year plan",
+            "cycling infrastructure improvements approved",
+            "electric vehicle charging stations installed",
+            "airport expansion project receives funding",
+            "ferry service expansion to outer islands",
         ]
         corpus2 = [
-            "health policy update and hospital funding",
-            "new health infrastructure and services",
-            "public health announcement",
+            "health policy update and hospital funding increased",
+            "new health infrastructure and medical services launched",
+            "public health announcement regarding vaccination program",
+            "ministry announces healthcare reform initiative",
+            "hospital capacity expansion project approved",
+            "mental health services receive additional funding",
+            "medical research facility construction begins",
+            "healthcare workers receive pay increase",
+            "new medical equipment purchased for hospitals",
+            "telemedicine services expanded nationwide",
+            "pharmaceutical industry regulation updated",
+            "healthcare accessibility improved in remote areas",
         ]
         result = topic_visualization([corpus1, corpus2], min_topic_size=2)
         # Basic structure checks
@@ -195,9 +224,31 @@ class TestTopicVisualization:
             pytest.skip("BERTopic not installed")
         from docframe.core.text_utils import topic_visualization
 
-        # Use overlapping vocabulary to help clustering
-        corpus1 = ["alpha beta gamma", "alpha beta", "beta gamma"]
-        corpus2 = ["alpha beta delta", "beta delta", "delta alpha beta"]
+        # Use larger corpora with overlapping vocabulary to help clustering
+        corpus1 = [
+            "alpha beta gamma topic modeling research",
+            "alpha beta advanced text analysis methods",
+            "beta gamma machine learning algorithms",
+            "alpha gamma natural language processing",
+            "beta delta statistical analysis techniques",
+            "alpha beta gamma comprehensive study",
+            "gamma delta research methodology overview",
+            "alpha beta computational linguistics approach",
+            "beta gamma advanced data mining",
+            "alpha delta text classification methods",
+        ]
+        corpus2 = [
+            "alpha beta delta artificial intelligence systems",
+            "beta delta machine learning applications",
+            "delta alpha beta neural network architectures",
+            "alpha gamma delta deep learning frameworks",
+            "beta delta computational intelligence methods",
+            "alpha beta delta advanced AI techniques",
+            "delta gamma artificial neural networks",
+            "alpha beta machine learning optimization",
+            "beta delta intelligent system design",
+            "delta alpha automated reasoning systems",
+        ]
         result = topic_visualization([corpus1, corpus2], min_topic_size=2)
         # All topics should report size lists of length 2
         assert all(len(t["size"]) == 2 for t in result["topics"])
