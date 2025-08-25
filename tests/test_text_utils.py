@@ -42,17 +42,18 @@ class TestComputeTokenFrequencies:
     def test_with_doclazyframe(self):
         df1 = dp.DocDataFrame({"text": ["hello world", "hello there"]})
         df2 = dp.DocDataFrame({"text": ["world peace", "hello world"]})
-        freqs, _ = dp.compute_token_frequencies(
-            {"lazy1": df1.to_doclazyframe(), "lazy2": df2.to_doclazyframe()}
-        )
+        freqs, _ = dp.compute_token_frequencies({
+            "lazy1": df1.to_doclazyframe(),
+            "lazy2": df2.to_doclazyframe(),
+        })
         assert set(freqs.keys()) == {"lazy1", "lazy2"}
         assert set(freqs["lazy1"].keys()) == set(freqs["lazy2"].keys())
 
     def test_mixed_frame_types(self):
         eager = dp.DocDataFrame({"text": ["hello world", "hello there"]})
-        lazy = dp.DocDataFrame(
-            {"text": ["world peace", "hello world"]}
-        ).to_doclazyframe()
+        lazy = dp.DocDataFrame({
+            "text": ["world peace", "hello world"]
+        }).to_doclazyframe()
         freqs, _ = dp.compute_token_frequencies({"eager": eager, "lazy": lazy})
         assert set(freqs["eager"].keys()) == set(freqs["lazy"].keys())
 
@@ -91,26 +92,22 @@ class TestComputeTokenFrequencies:
     def test_very_long_token_lists(self):
         long_text1 = " ".join(["word"] * 1000 + ["unique1"])
         long_text2 = " ".join(["word"] * 800 + ["unique2"])
-        freqs, _ = dp.compute_token_frequencies(
-            {
-                "long1": dp.DocDataFrame({"text": [long_text1]}),
-                "long2": dp.DocDataFrame({"text": [long_text2]}),
-            }
-        )
+        freqs, _ = dp.compute_token_frequencies({
+            "long1": dp.DocDataFrame({"text": [long_text1]}),
+            "long2": dp.DocDataFrame({"text": [long_text2]}),
+        })
         assert freqs["long1"]["word"] == 1000 and freqs["long2"]["word"] == 800
         assert freqs["long1"]["unique1"] == 1 and freqs["long2"]["unique2"] == 1
 
     def test_auto_detected_document_column(self):
-        df = dp.DocDataFrame(
-            {
-                "short": ["hi", "bye"],
-                "content": [
-                    "this is a longer text column",
-                    "with more detailed content",
-                ],
-                "id": [1, 2],
-            }
-        )
+        df = dp.DocDataFrame({
+            "short": ["hi", "bye"],
+            "content": [
+                "this is a longer text column",
+                "with more detailed content",
+            ],
+            "id": [1, 2],
+        })
         freqs, _ = dp.compute_token_frequencies({"auto": df})
         assert (
             "longer" in freqs["auto"]
@@ -134,8 +131,10 @@ class TestTopicVisualization:
 
     def test_basic_two_corpora(self):
         import importlib
+
         if importlib.util.find_spec("bertopic") is None:
             import pytest
+
             pytest.skip("BERTopic not installed")
         from docframe.core.text_utils import topic_visualization
 
@@ -144,12 +143,12 @@ class TestTopicVisualization:
             "new infrastructure funding for roads",
             "public transport improvements planned",
         ]
-    corpus2 = [
+        corpus2 = [
             "health policy update and hospital funding",
             "new health infrastructure and services",
             "public health announcement",
         ]
-    result = topic_visualization([corpus1, corpus2], min_topic_size=2)
+        result = topic_visualization([corpus1, corpus2], min_topic_size=2)
         # Basic structure checks
         assert set(result.keys()) == {
             "corpus_sizes",
@@ -173,11 +172,14 @@ class TestTopicVisualization:
 
     def test_invalid_input(self):
         import importlib
+
         if importlib.util.find_spec("bertopic") is None:
             import pytest
+
             pytest.skip("BERTopic not installed")
-        from docframe.core.text_utils import topic_visualization
         import pytest
+
+        from docframe.core.text_utils import topic_visualization
 
         with pytest.raises(ValueError):
             topic_visualization([])
@@ -186,10 +188,13 @@ class TestTopicVisualization:
 
     def test_custom_min_topic_size(self):
         import importlib
+
         if importlib.util.find_spec("bertopic") is None:
             import pytest
+
             pytest.skip("BERTopic not installed")
         from docframe.core.text_utils import topic_visualization
+
         # Use overlapping vocabulary to help clustering
         corpus1 = ["alpha beta gamma", "alpha beta", "beta gamma"]
         corpus2 = ["alpha beta delta", "beta delta", "delta alpha beta"]
@@ -197,7 +202,9 @@ class TestTopicVisualization:
         # All topics should report size lists of length 2
         assert all(len(t["size"]) == 2 for t in result["topics"])
         # Sum of per-corpus topic sizes equals corpus sizes when excluding outlier (-1)
-        assigned_counts = [sum(t["size"][i] for t in result["topics"]) for i in range(2)]
+        assigned_counts = [
+            sum(t["size"][i] for t in result["topics"]) for i in range(2)
+        ]
         # Account for possible outliers: assigned_counts <= corpus_sizes
         for i, total in enumerate(assigned_counts):
             assert total <= result["corpus_sizes"][i]

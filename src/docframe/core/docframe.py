@@ -507,32 +507,32 @@ class DocDataFrame(_DocumentColumnMixin):
         return pl.DataFrame(dtm_data)
 
     def join(
-        self, other: Union["DocDataFrame", pl.DataFrame, pl.LazyFrame], *args, **kwargs
+        self,
+        other: Union["DocDataFrame", "DocLazyFrame", pl.DataFrame, pl.LazyFrame],
+        *args,
+        **kwargs,
     ) -> "DocDataFrame":
         """
-        Join with another DocDataFrame or polars DataFrame.
+        Join with another Doc/Polars frame and return a DocDataFrame.
 
-        Parameters
-        ----------
-        other : DocDataFrame, pl.DataFrame, or pl.LazyFrame
-            DataFrame to join with
-        *args, **kwargs
-            Additional arguments passed to polars join method
-
-        Returns
-        -------
-        DocDataFrame
-            New DocDataFrame with joined data
+        Accepts DocDataFrame, DocLazyFrame, pl.DataFrame, or pl.LazyFrame.
+        Lazy inputs are materialized since the receiver is eager.
+        If other is a Doc* type, its document column is ignored; the receiver's
+        document column is preserved for the result wrapper.
         """
         if isinstance(other, DocDataFrame):
             other_df: pl.DataFrame = other._df
+        elif isinstance(other, DocLazyFrame):
+            other_df = other._df.collect()
         elif isinstance(other, pl.LazyFrame):
             other_df = other.collect()
         else:
+            # assume pl.DataFrame
             other_df = other  # type: ignore[assignment]
 
         joined_df = self._df.join(other_df, *args, **kwargs)  # type: ignore[arg-type]
         return DocDataFrame(joined_df, document_column=self._document_column_name)
+
 
 class DocLazyFrame(_DocumentColumnMixin):
     """
@@ -622,3 +622,48 @@ class DocLazyFrame(_DocumentColumnMixin):
     def with_document_column(self, column_name: str) -> "DocLazyFrame":
         """Alias to set_document for backward compatibility."""
         return self.set_document(column_name)  # type: ignore[return-value]
+
+    def join(
+        self,
+        other: Union["DocDataFrame", "DocLazyFrame", pl.DataFrame, pl.LazyFrame],
+        *args,
+        **kwargs,
+    ) -> Union["DocLazyFrame", "DocDataFrame"]:
+        """
+        Join this DocLazyFrame with another frame (Doc/Polars).
+
+        Rules:
+        - If both operands are lazy types (DocLazyFrame or pl.LazyFrame), perform a lazy join
+          and return a DocLazyFrame.
+        - Otherwise, materialize lazy inputs, perform an eager join, and return a DocDataFrame.
+        - When joining with another Doc* type, ignore its document column in favor of this
+          frame's document column for the result wrapper.
+        """
+        left_doc = self._document_column_name
+
+        # Determine if the other side is lazy
+        other_is_lazy = isinstance(other, (DocLazyFrame, pl.LazyFrame))
+
+        if other_is_lazy:
+            # both sides are lazy (self always is lazy here)
+            # perform a lazy join and return DocLazyFrame
+            if isinstance(other, DocLazyFrame):
+                right_lf = other._df
+            else:
+                right_lf = other  # type: ignore[assignment]
+
+            joined_lf = self._df.join(right_lf, *args, **kwargs)  # type: ignore[arg-type]
+            return DocLazyFrame(joined_lf, document_column=left_doc)
+
+        # Otherwise, materialize to DataFrames and return DocDataFrame
+        left_df = self._df.collect()
+        if isinstance(other, DocDataFrame):
+            right_df = other._df
+        elif isinstance(other, pl.DataFrame):
+            right_df = other
+        else:
+            # Safety: collect any stray lazy-like types
+            right_df = other.collect()  # type: ignore[attr-defined]
+
+        joined_df = left_df.join(right_df, *args, **kwargs)
+        return DocDataFrame(joined_df, document_column=left_doc)

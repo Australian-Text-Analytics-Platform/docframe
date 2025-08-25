@@ -10,22 +10,22 @@ from typing import Any, Dict, List, Optional, Union
 import numpy as np
 import polars as pl
 
-try:  # Lazy optional BERTopic dependency
-    import importlib
+try:  # Lazy optional BERTopic dependency (avoid heavy import at module load)
+    import importlib.util
 
-    _bertopic_mod = importlib.import_module("bertopic")  # noqa: F401
-    _HAS_BERTOPIC = True
+    _HAS_BERTOPIC = importlib.util.find_spec("bertopic") is not None
 except Exception:  # pragma: no cover
     _HAS_BERTOPIC = False
 from sklearn.preprocessing import MinMaxScaler
 
+# Detect UMAP availability without importing it (to avoid heavy deps at import time)
 try:  # Optional dependency: if unavailable, we fall back to PCA
-    from umap import UMAP  # type: ignore
+    import importlib.util as _il_util
 
-    _HAS_UMAP = True
+    _HAS_UMAP = _il_util.find_spec("umap") is not None
 except Exception:  # pragma: no cover - environment without umap
-    UMAP = None  # type: ignore
     _HAS_UMAP = False
+UMAP = None  # type: ignore
 
 
 def simple_tokenize(
@@ -678,6 +678,9 @@ def topic_visualization(
         coords = np.array([[0.0, 0.0]])
     else:
         if _HAS_UMAP:
+            # Lazy import here to avoid numba/llvmlite initialization during module import
+            from umap import UMAP  # type: ignore
+
             if c_tfidf_used:
                 emb_norm = MinMaxScaler().fit_transform(embeddings)
                 coords = UMAP(
