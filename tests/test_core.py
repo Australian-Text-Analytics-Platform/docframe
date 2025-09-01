@@ -264,17 +264,20 @@ class TestDocDataFrame:
 
         assert isinstance(concordance_result, pl.DataFrame)
         assert len(concordance_result) == 3  # Should find 3 matches
-        assert "document_idx" in concordance_result.columns
         assert "left_context" in concordance_result.columns
         assert "matched_text" in concordance_result.columns
         assert "right_context" in concordance_result.columns
+        assert "start_idx" in concordance_result.columns
+        assert "end_idx" in concordance_result.columns
 
         # Check that all matched_text are "fox"
         matched_texts = concordance_result["matched_text"].to_list()
         assert all(text == "fox" for text in matched_texts)
 
         # Test case sensitive search
-        concordance_case = df.text.concordance("text", "Fox", case_sensitive=True)
+        concordance_case = df.text.concordance(
+            "text", "Fox", case_sensitive=True
+        ).drop_nulls()
         assert (
             len(concordance_case) == 0
         )  # Should find no matches with case sensitivity
@@ -293,10 +296,11 @@ class TestDocDataFrame:
         concordance_empty = df.text.concordance("text", "")
         assert len(concordance_empty) == 0
         assert list(concordance_empty.columns) == [
-            "document_idx",
             "left_context",
             "matched_text",
             "right_context",
+            "start_idx",
+            "end_idx",
             "l1",
             "l1_freq",
             "r1",
@@ -438,7 +442,3 @@ class TestDocDataFrame:
             df.text.frequency_analysis("created_at", frequency="hourly")
 
     # ...existing code...
-
-
-if __name__ == "__main__":
-    pytest.main([__file__])

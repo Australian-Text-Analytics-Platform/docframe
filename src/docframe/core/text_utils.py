@@ -2,6 +2,7 @@
 Text processing utilities
 """
 
+import os
 import re
 import string
 import warnings
@@ -39,7 +40,7 @@ def simple_tokenize(
 ) -> List[str]:
     """Simple tokenization using regex"""
     if not isinstance(text, str):
-        return []
+        raise TypeError("Input must be a string")
 
     # Convert to lowercase if requested
     if lowercase:
@@ -51,7 +52,7 @@ def simple_tokenize(
 
     # Split on whitespace
     tokens = text.split()
-    return [token.strip() for token in tokens if token.strip()]
+    return tokens
 
 
 def clean_text(
@@ -129,6 +130,381 @@ def contains_pattern(text: str, pattern: str, case_sensitive: bool = False) -> b
 
     flags = 0 if case_sensitive else re.IGNORECASE
     return bool(re.search(pattern, text, flags))
+
+
+# -----------------------------
+# Quotation extraction (heuristic)
+# -----------------------------
+
+
+def quotation_elements(text: Optional[str]) -> List[Dict[str, Any]]:
+    """Extract quotations from a single text using lightweight heuristics.
+
+    Returns a list of dicts with keys:
+      - speaker: str
+      - speaker_start_idx: int (char index, start)
+      - speaker_end_idx: int (char index, end/exclusive)
+      - quote: str (includes surrounding double quotes if present)
+      - quote_start_idx: int (char index, start at opening quote if present)
+      - quote_end_idx: int (char index, end/exclusive at closing quote if present)
+      - verb: str (quoting verb or phrase)
+      - verb_start_idx: int
+      - verb_end_idx: int
+      - quote_type: str (Heuristic | AccordingTo | VerbBefore | VerbAfter)
+
+    Notes
+    -----
+    - Uses simple tokenization and proximity heuristics (no spaCy dependency).
+    - Quote spans are detected as text between matching double quote characters ("").
+    - Verbs are selected from quote_verb.txt and matched case-insensitively.
+    - Speaker is approximated as the nearest proper-name-like token group near the verb.
+    """
+    if not isinstance(text, str) or not text:
+        return []
+
+    # Load quote verbs (cached in closure)
+    def _load_quote_verbs_inner() -> set[str]:
+        candidates: List[str] = []
+        try:
+            this_dir = os.path.dirname(__file__)
+            data_path = os.path.normpath(
+                os.path.join(this_dir, "..", "data", "quote_verb.txt")
+            )
+            if os.path.exists(data_path):
+                with open(data_path, "r", encoding="utf-8") as f:
+                    candidates.extend([ln.strip() for ln in f if ln.strip()])
+        except Exception:
+            candidates = []
+        if not candidates:
+            candidates = [
+                "say",
+                "said",
+                "says",
+                "tell",
+                "told",
+                "writes",
+                "wrote",
+                "tweet",
+                "tweeted",
+                "tweeting",
+                "according to",
+                "state",
+                "stated",
+                "states",
+                "report",
+                "reported",
+                "reports",
+            ]
+        return set(c.lower() for c in candidates if c)
+
+    verbs = _load_quote_verbs_inner()
+
+    # Tokenize with indices, keeping punctuation and quotes
+    # Regex splits into words (\w+), double quotes, or other single non-space chars
+    token_re = re.compile(r"\w+|\"|[^\w\s]")
+    tokens: List[Dict[str, Any]] = []
+    for m in token_re.finditer(text):
+        tok = m.group(0)
+        tokens.append({"text": tok, "start": m.start(), "end": m.end()})
+
+    def join_span(start: int, end: int) -> str:
+        return text[start:end]
+
+    # Find quote spans delimited by double quotes
+    quote_spans: List[tuple[int, int]] = []  # (start_idx, end_idx) exclusive
+    open_idx: Optional[int] = None
+    for t in tokens:
+        if t["text"] == '"':
+            if open_idx is None:
+                open_idx = t["start"]
+            else:
+                # Close and record including the closing quote char
+                quote_spans.append((open_idx, t["end"]))
+                open_idx = None
+
+    # Helper: locate nearest verb occurrence around a region
+    # Returns (verb_text, start, end)
+    def find_nearest_verb(
+        span_start: int, span_end: int
+    ) -> tuple[str, int, int] | tuple[None, None, None]:
+        # Search windows in characters
+        LEFT_WIN = 200
+        RIGHT_WIN = 200
+        left_start = max(0, span_start - LEFT_WIN)
+        right_end = min(len(text), span_end + RIGHT_WIN)
+
+        # Collect candidate matches as (distance, start, end, text)
+        candidates: List[tuple[int, int, int, str]] = []
+
+        # Iterate by index for neighbor access
+        for i, t in enumerate(tokens):
+            ts, te, tt = t["start"], t["end"], t["text"]
+            if te <= left_start or ts >= right_end:
+                continue
+            lower = tt.lower()
+            # Check for phrase "according to"
+            if (
+                lower == "according"
+                and (i + 1) < len(tokens)
+                and tokens[i + 1]["text"].lower() == "to"
+            ):
+                vs, ve = ts, tokens[i + 1]["end"]
+                vtxt = "according to"
+                # Distance to quote span
+                if ve <= span_start:
+                    dist = span_start - ve
+                elif vs >= span_end:
+                    dist = vs - span_end
+                else:
+                    dist = 0
+                candidates.append((dist, vs, ve, vtxt))
+            # Single-token verb match
+            if lower in verbs:
+                vs, ve = ts, te
+                vtxt = tt
+                if ve <= span_start:
+                    dist = span_start - ve
+                elif vs >= span_end:
+                    dist = vs - span_end
+                else:
+                    dist = 0
+                candidates.append((dist, vs, ve, vtxt))
+
+        if not candidates:
+            return (None, None, None)
+
+        # Choose closest, tie-breaker: prefers before the quote
+        candidates.sort(key=lambda x: (x[0], x[1]))
+        _, vs, ve, vtxt = candidates[0]
+        return (vtxt, vs, ve)
+
+    TITLE_WORDS = {
+        "mr",
+        "mrs",
+        "ms",
+        "dr",
+        "prof",
+        "sir",
+        "madam",
+        "president",
+        "minister",
+        "senator",
+        "sen",
+        "rep",
+        "capt",
+        "gen",
+        "gov",
+        "amb",
+        "lord",
+        "lady",
+    }
+
+    def is_name_token(tok: str) -> bool:
+        if not tok:
+            return False
+        if tok[0].isupper() and any(c.isalpha() for c in tok):
+            return True
+        # All caps (ACRONYMS)
+        if len(tok) > 1 and tok.isupper() and tok.isalpha():
+            return True
+        # Title words (lowercase in our test but we'll lower for match)
+        if tok.lower().rstrip(".") in TITLE_WORDS:
+            return True
+        return False
+
+    # Find nearest contiguous name group near pivot index (verb)
+    def find_speaker_near(
+        pivot_start: int, pivot_end: int, direction: str
+    ) -> tuple[str, int, int] | tuple[None, None, None]:
+        # Scan tokens to left or right for a contiguous block of name-like tokens
+        MAX_HOPS = 50
+        if direction == "left":
+            # Walk leftwards to find the nearest block ending closest to pivot_start
+            i = (
+                next(
+                    (i for i in range(len(tokens)) if tokens[i]["end"] > pivot_start),
+                    len(tokens),
+                )
+                - 1
+            )
+            hops = 0
+            while i >= 0 and hops < MAX_HOPS:
+                tt = tokens[i]["text"]
+                if is_name_token(tt):
+                    # Expand to include contiguous name tokens to the left
+                    j = i
+                    while j - 1 >= 0 and is_name_token(tokens[j - 1]["text"]):
+                        j -= 1
+                    start = tokens[j]["start"]
+                    end = tokens[i]["end"]
+                    return (join_span(start, end), start, end)
+                elif tt in {",", ";", ":", "-", "—", "."}:
+                    # Hard boundary
+                    break
+                i -= 1
+                hops += 1
+        else:  # right
+            i = next(
+                (i for i in range(len(tokens)) if tokens[i]["start"] >= pivot_end),
+                len(tokens),
+            )
+            hops = 0
+            while i < len(tokens) and hops < MAX_HOPS:
+                tt = tokens[i]["text"]
+                if is_name_token(tt):
+                    # Expand to include contiguous name tokens to the right
+                    j = i
+                    while j + 1 < len(tokens) and is_name_token(tokens[j + 1]["text"]):
+                        j += 1
+                    start = tokens[i]["start"]
+                    end = tokens[j]["end"]
+                    return (join_span(start, end), start, end)
+                elif tt in {",", ";", ":", "-", "—", "."}:
+                    break
+                i += 1
+                hops += 1
+        return (None, None, None)
+
+    results: List[Dict[str, Any]] = []
+
+    for qs, qe in quote_spans:
+        quote_text = join_span(qs, qe)
+
+        # Try to find nearest verb
+        vtxt, vs, ve = find_nearest_verb(qs, qe)
+
+        speaker_text: str = ""
+        ss: Optional[int] = None
+        se: Optional[int] = None
+        quote_type = "Heuristic"
+
+        if vtxt is not None and vs is not None and ve is not None:
+            # Determine side relative to quote
+            if ve <= qs:
+                # verb before quote
+                # Prefer speaker immediately to left of verb
+                spk = find_speaker_near(vs, ve, direction="left")
+                if spk[0] is None:
+                    # Sometimes speaker after verb (e.g., said John)
+                    spk = find_speaker_near(vs, ve, direction="right")
+                speaker_text, ss, se = spk
+                quote_type = (
+                    "AccordingTo" if vtxt.lower() == "according to" else "VerbBefore"
+                )
+            elif vs >= qe:
+                # verb after quote (e.g., "...", said John)
+                spk = find_speaker_near(vs, ve, direction="right")
+                if spk[0] is None:
+                    spk = find_speaker_near(vs, ve, direction="left")
+                speaker_text, ss, se = spk
+                quote_type = (
+                    "AccordingTo" if vtxt.lower() == "according to" else "VerbAfter"
+                )
+            else:
+                # Overlapping (unlikely), still record
+                quote_type = "Heuristic"
+
+        # Fallback for According to pattern not caught by nearest search: scan local window
+        if (vtxt is None) or (vtxt.lower() != "according to"):
+            # scan explicitly around quotes
+            WINDOW = 150
+            left_ctx = text[max(0, qs - WINDOW) : qs]
+            # Simple search for phrase
+            m = re.search(r"according to\s+([^,\n]+)", left_ctx, flags=re.IGNORECASE)
+            if m:
+                vtxt = "according to"
+                vs = max(0, qs - WINDOW) + m.start()
+                # position of "to" end
+                verb_end_rel = m.start() + len("according to")
+                ve = max(0, qs - WINDOW) + verb_end_rel
+                # capture group is speaker until comma/newline
+                sp_rel_start, sp_rel_end = m.start(1), m.end(1)
+                ss = max(0, qs - WINDOW) + sp_rel_start
+                se = max(0, qs - WINDOW) + sp_rel_end
+                speaker_text = text[ss:se]
+                quote_type = "AccordingTo"
+
+        result = {
+            "speaker": speaker_text or "",
+            "speaker_start_idx": int(ss) if ss is not None else -1,
+            "speaker_end_idx": int(se) if se is not None else -1,
+            "quote": quote_text,
+            "quote_start_idx": int(qs),
+            "quote_end_idx": int(qe),
+            "verb": vtxt or "",
+            "verb_start_idx": int(vs) if vs is not None else -1,
+            "verb_end_idx": int(ve) if ve is not None else -1,
+            "quote_type": quote_type,
+        }
+        results.append(result)
+
+    return results
+
+
+def concordance_elements(
+    text: Optional[str],
+    search_word: str,
+    num_left_tokens: int = 10,
+    num_right_tokens: int = 10,
+    regex: bool = False,
+    case_sensitive: bool = False,
+) -> List[Dict[str, Any]]:
+    """Element-wise concordance: returns matches with contexts and indices for a single text.
+
+    Returns list of dicts with keys:
+      - left_context: str
+      - matched_text: str
+      - right_context: str
+      - start_idx: int (match start char index)
+      - end_idx: int (match end char index)
+      - l1: str (token immediately to the left, or "")
+      - r1: str (token immediately to the right, or "")
+    """
+    if (
+        not isinstance(text, str)
+        or not isinstance(search_word, str)
+        or len(search_word) == 0
+    ):
+        return []
+
+    pattern = search_word if regex else re.escape(search_word)
+    flags = 0 if case_sensitive else re.IGNORECASE
+    searcher = re.compile(pattern, flags)
+
+    results: List[Dict[str, Any]] = []
+    for match in searcher.finditer(text):
+        matched_text = match.group(0)
+        start_idx = match.start()
+        end_idx = match.end()
+
+        left_text = text[:start_idx]
+        right_text = text[end_idx:]
+
+        # Tokenize left/right contexts without altering case or punctuation
+        left_tokens = simple_tokenize(left_text, lowercase=False, remove_punct=False)
+        right_tokens = simple_tokenize(right_text, lowercase=False, remove_punct=False)
+
+        left_context_tokens = (
+            left_tokens[-num_left_tokens:] if num_left_tokens > 0 else []
+        )
+        right_context_tokens = (
+            right_tokens[:num_right_tokens] if num_right_tokens > 0 else []
+        )
+
+        l1 = left_context_tokens[-1] if left_context_tokens else ""
+        r1 = right_context_tokens[0] if right_context_tokens else ""
+
+        results.append({
+            "left_context": " ".join(left_context_tokens),
+            "matched_text": matched_text,
+            "right_context": " ".join(right_context_tokens),
+            "start_idx": int(start_idx),
+            "end_idx": int(end_idx),
+            "l1": l1,
+            "r1": r1,
+        })
+
+    return results
 
 
 def remove_stopwords(

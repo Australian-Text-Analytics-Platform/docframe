@@ -11,7 +11,8 @@ from .docframe import DocDataFrame, DocLazyFrame
 from .text_utils import (
     char_count,
     clean_text,
-    extract_ngrams,
+    concordance_elements,
+    quotation_elements,
     remove_stopwords,
     sentence_count,
     simple_tokenize,
@@ -26,14 +27,20 @@ class TextExprNamespace:
     def __init__(self, expr: pl.Expr):
         self._expr = expr
 
-    def tokenize(self, lowercase: bool = True, remove_punct: bool = True) -> pl.Expr:
+    def tokenize(
+        self, lowercase: bool = True, remove_punct: bool = True, explode=False
+    ) -> pl.Expr:
         """Tokenize text into list of tokens"""
 
         _tokenize = partial(
             simple_tokenize, lowercase=lowercase, remove_punct=remove_punct
         )
 
-        return self._expr.map_elements(_tokenize, return_dtype=pl.List(pl.String))
+        results = self._expr.map_elements(_tokenize, return_dtype=pl.List(pl.String))
+        if explode:
+            return results.list.explode()
+        else:
+            return results
 
     def clean(
         self,
@@ -111,6 +118,77 @@ class TextExprNamespace:
         """Filter tokens by minimum length"""
         return self._expr.list.eval(
             pl.element().filter(pl.element().str.len_chars() >= min_length)
+        )
+
+    def concordance(
+        self,
+        search_word: str,
+        num_left_tokens: int = 10,
+        num_right_tokens: int = 10,
+        regex: bool = False,
+        case_sensitive: bool = False,
+    ) -> pl.Expr:
+        """Element-wise concordance returning list-of-dicts per row.
+
+        Returns List[Struct] per element. Users can call .list.explode() if needed.
+        """
+
+        def _conc(text: Optional[str]):
+            return concordance_elements(
+                text,
+                search_word,
+                num_left_tokens=num_left_tokens,
+                num_right_tokens=num_right_tokens,
+                regex=regex,
+                case_sensitive=case_sensitive,
+            )
+
+        # Map to list of Python dicts; Polars will infer to List(Struct(...))
+        expr = self._expr.map_elements(
+            _conc,
+            return_dtype=pl.List(
+                pl.Struct([
+                    pl.Field("left_context", pl.String),
+                    pl.Field("matched_text", pl.String),
+                    pl.Field("right_context", pl.String),
+                    pl.Field("start_idx", pl.Int64),
+                    pl.Field("end_idx", pl.Int64),
+                    pl.Field("l1", pl.String),
+                    pl.Field("r1", pl.String),
+                ])
+            ),
+        )
+
+        return expr
+
+    def quotation(self) -> pl.Expr:
+        """Element-wise quotation extraction returning list-of-dicts per row.
+
+        Each element is a list of structs with fields:
+        speaker, speaker_start_idx, speaker_end_idx,
+        quote, quote_start_idx, quote_end_idx,
+        verb, verb_start_idx, verb_end_idx, quote_type
+        """
+
+        def _quotes(text: Optional[str]):
+            return quotation_elements(text)
+
+        return self._expr.map_elements(
+            _quotes,
+            return_dtype=pl.List(
+                pl.Struct([
+                    pl.Field("speaker", pl.String),
+                    pl.Field("speaker_start_idx", pl.Int64),
+                    pl.Field("speaker_end_idx", pl.Int64),
+                    pl.Field("quote", pl.String),
+                    pl.Field("quote_start_idx", pl.Int64),
+                    pl.Field("quote_end_idx", pl.Int64),
+                    pl.Field("verb", pl.String),
+                    pl.Field("verb_start_idx", pl.Int64),
+                    pl.Field("verb_end_idx", pl.Int64),
+                    pl.Field("quote_type", pl.String),
+                ])
+            ),
         )
 
     def to_dtm(self, method: str = "count", **kwargs):
@@ -211,6 +289,42 @@ class TextSeriesNamespace:
                     pattern, case_sensitive=case_sensitive
                 )
             )
+            .to_series()
+        )
+
+    def concordance(
+        self,
+        search_word: str,
+        num_left_tokens: int = 10,
+        num_right_tokens: int = 10,
+        regex: bool = False,
+        case_sensitive: bool = False,
+    ) -> pl.Series:
+        """Series-level concordance returning List[Struct] per element.
+
+        Use .list.explode() on the result to get one row per match if desired.
+        """
+        return (
+            self._series.to_frame()
+            .select(
+                pl.col(self._series.name)
+                .text.concordance(
+                    search_word,
+                    num_left_tokens=num_left_tokens,
+                    num_right_tokens=num_right_tokens,
+                    regex=regex,
+                    case_sensitive=case_sensitive,
+                )
+                .alias(self._series.name)
+            )
+            .to_series()
+        )
+
+    def quotation(self) -> pl.Series:
+        """Series-level quotation extraction returning List[Struct] per element."""
+        return (
+            self._series.to_frame()
+            .select(pl.col(self._series.name).text.quotation().alias(self._series.name))
             .to_series()
         )
 
@@ -366,6 +480,55 @@ class TextDataFrameNamespace:
             .alias(f"{column}_contains")
         )
 
+    def quotation(self, column: str) -> pl.DataFrame:
+        """Extract quotations from a text column using heuristics.
+
+        Returns a flat DataFrame with one row per extracted quote and columns:
+        speaker, speaker_start_idx, speaker_end_idx, quote, quote_start_idx,
+        quote_end_idx, verb, verb_start_idx, verb_end_idx, quote_type
+        """
+
+        tmp = self._df.with_columns([
+            pl.col(column).text.quotation().alias("__quotes__")
+        ])
+
+        exploded = tmp.select([
+            pl.col("__quotes__").list.explode(),
+        ])
+
+        if exploded.height == 0:
+            return pl.DataFrame({
+                "speaker": pl.Series([], dtype=pl.String),
+                "speaker_start_idx": pl.Series([], dtype=pl.Int64),
+                "speaker_end_idx": pl.Series([], dtype=pl.Int64),
+                "quote": pl.Series([], dtype=pl.String),
+                "quote_start_idx": pl.Series([], dtype=pl.Int64),
+                "quote_end_idx": pl.Series([], dtype=pl.Int64),
+                "verb": pl.Series([], dtype=pl.String),
+                "verb_start_idx": pl.Series([], dtype=pl.Int64),
+                "verb_end_idx": pl.Series([], dtype=pl.Int64),
+                "quote_type": pl.Series([], dtype=pl.String),
+            })
+
+        return exploded.select([
+            pl.col("__quotes__").struct.field("speaker").alias("speaker"),
+            pl.col("__quotes__")
+            .struct.field("speaker_start_idx")
+            .alias("speaker_start_idx"),
+            pl.col("__quotes__")
+            .struct.field("speaker_end_idx")
+            .alias("speaker_end_idx"),
+            pl.col("__quotes__").struct.field("quote").alias("quote"),
+            pl.col("__quotes__")
+            .struct.field("quote_start_idx")
+            .alias("quote_start_idx"),
+            pl.col("__quotes__").struct.field("quote_end_idx").alias("quote_end_idx"),
+            pl.col("__quotes__").struct.field("verb").alias("verb"),
+            pl.col("__quotes__").struct.field("verb_start_idx").alias("verb_start_idx"),
+            pl.col("__quotes__").struct.field("verb_end_idx").alias("verb_end_idx"),
+            pl.col("__quotes__").struct.field("quote_type").alias("quote_type"),
+        ])
+
     def concordance(
         self,
         column: str,
@@ -375,151 +538,83 @@ class TextDataFrameNamespace:
         regex: bool = False,
         case_sensitive: bool = False,
     ) -> pl.DataFrame:
-        """
-        Generate a concordance table for a search word/pattern in a text column.
-
-        Parameters
-        ----------
-        column : str
-            Name of the text column to search in
-        search_word : str
-            Word or pattern to search for
-        num_left_tokens : int, default 10
-            Number of tokens to include in left context
-        num_right_tokens : int, default 10
-            Number of tokens to include in right context
-        regex : bool, default False
-            Whether to treat search_word as a regex pattern
-        case_sensitive : bool, default False
-            Whether the search should be case sensitive
-
-        Returns
-        -------
-        pl.DataFrame
-            DataFrame with columns: document_idx, left_context, matched_text, right_context, l1, l1_freq, r1, r1_freq
-        """
-        import re
-        from collections import Counter
-
-        from .text_utils import simple_tokenize
-
         if len(search_word) == 0:
-            return pl.DataFrame(
-                {
-                    "document_idx": [],
-                    "left_context": [],
-                    "matched_text": [],
-                    "right_context": [],
-                    "l1": [],
-                    "l1_freq": [],
-                    "r1": [],
-                    "r1_freq": [],
-                },
-                schema={
-                    "document_idx": pl.Int32,
-                    "left_context": pl.String,
-                    "matched_text": pl.String,
-                    "right_context": pl.String,
-                    "l1": pl.String,
-                    "l1_freq": pl.Int32,
-                    "r1": pl.String,
-                    "r1_freq": pl.Int32,
-                },
+            return pl.DataFrame({
+                "left_context": pl.Series([], dtype=pl.String),
+                "matched_text": pl.Series([], dtype=pl.String),
+                "right_context": pl.Series([], dtype=pl.String),
+                "start_idx": pl.Series([], dtype=pl.Int64),
+                "end_idx": pl.Series([], dtype=pl.Int64),
+                "l1": pl.Series([], dtype=pl.String),
+                "l1_freq": pl.Series([], dtype=pl.Int32),
+                "r1": pl.Series([], dtype=pl.String),
+                "r1_freq": pl.Series([], dtype=pl.Int32),
+            })
+
+        # Use expression-level concordance and explode
+        tmp = self._df.with_columns([
+            pl.col(column)
+            .text.concordance(
+                search_word,
+                num_left_tokens=num_left_tokens,
+                num_right_tokens=num_right_tokens,
+                regex=regex,
+                case_sensitive=case_sensitive,
             )
+            .alias("__concordance__")
+        ])
 
-        # Create regex pattern
-        pattern = search_word if regex else re.escape(search_word)
-        flags = 0 if case_sensitive else re.IGNORECASE
-        searcher = re.compile(pattern, flags)
+        exploded = tmp.select([
+            pl.col("__concordance__").list.explode(),
+        ])
 
-        # Get the text column as a list
-        texts = self._df[column].to_list()
+        if exploded.height == 0:
+            return pl.DataFrame({
+                "left_context": pl.Series([], dtype=pl.String),
+                "matched_text": pl.Series([], dtype=pl.String),
+                "right_context": pl.Series([], dtype=pl.String),
+                "start_idx": pl.Series([], dtype=pl.Int64),
+                "end_idx": pl.Series([], dtype=pl.Int64),
+                "l1": pl.Series([], dtype=pl.String),
+                "l1_freq": pl.Series([], dtype=pl.Int32),
+                "r1": pl.Series([], dtype=pl.String),
+                "r1_freq": pl.Series([], dtype=pl.Int32),
+            })
 
-        conc_table = []
-        l1_tokens = []  # Collect all L1 tokens for frequency calculation
-        r1_tokens = []  # Collect all R1 tokens for frequency calculation
+        df = exploded.select([
+            pl.col("__concordance__")
+            .struct.field("left_context")
+            .alias("left_context"),
+            pl.col("__concordance__")
+            .struct.field("matched_text")
+            .alias("matched_text"),
+            pl.col("__concordance__")
+            .struct.field("right_context")
+            .alias("right_context"),
+            pl.col("__concordance__").struct.field("start_idx").alias("start_idx"),
+            pl.col("__concordance__").struct.field("end_idx").alias("end_idx"),
+            pl.col("__concordance__").struct.field("l1").alias("l1"),
+            pl.col("__concordance__").struct.field("r1").alias("r1"),
+        ])
 
-        # First pass: collect all matches and extract L1/R1 tokens
-        for idx, doc in enumerate(texts):
-            if doc is None:
-                continue
+        # Compute frequencies for l1 and r1 across all rows
+        if df.height == 0:
+            return df.with_columns([
+                pl.lit(0).cast(pl.Int32).alias("l1_freq"),
+                pl.lit(0).cast(pl.Int32).alias("r1_freq"),
+            ])
 
-            for match in searcher.finditer(doc):
-                matched_text = match.group(0)
-                left_text = doc[: match.start()]
-                right_text = doc[match.end() :]
+        l1_counts = df.group_by("l1").agg(pl.len().alias("l1_freq"))
+        r1_counts = df.group_by("r1").agg(pl.len().alias("r1_freq"))
 
-                # Tokenize left and right contexts
-                left_tokens = simple_tokenize(
-                    left_text, lowercase=False, remove_punct=False
-                )
-                right_tokens = simple_tokenize(
-                    right_text, lowercase=False, remove_punct=False
-                )
-
-                # Get the specified number of context tokens
-                left_context_tokens = (
-                    left_tokens[-num_left_tokens:] if num_left_tokens > 0 else []
-                )
-                right_context_tokens = (
-                    right_tokens[:num_right_tokens] if num_right_tokens > 0 else []
-                )
-
-                # Extract L1 and R1 tokens (first left and first right)
-                l1 = left_context_tokens[-1] if left_context_tokens else ""
-                r1 = right_context_tokens[0] if right_context_tokens else ""
-
-                conc_table.append(
-                    {
-                        "document_idx": idx,
-                        "left_context": " ".join(left_context_tokens),
-                        "matched_text": matched_text,
-                        "right_context": " ".join(right_context_tokens),
-                        "l1": l1,
-                        "r1": r1,
-                    }
-                )
-
-                # Collect for frequency calculation
-                if l1:
-                    l1_tokens.append(l1)
-                if r1:
-                    r1_tokens.append(r1)
-
-        if len(conc_table) == 0:
-            return pl.DataFrame(
-                {
-                    "document_idx": [],
-                    "left_context": [],
-                    "matched_text": [],
-                    "right_context": [],
-                    "l1": [],
-                    "l1_freq": [],
-                    "r1": [],
-                    "r1_freq": [],
-                },
-                schema={
-                    "document_idx": pl.Int32,
-                    "left_context": pl.String,
-                    "matched_text": pl.String,
-                    "right_context": pl.String,
-                    "l1": pl.String,
-                    "l1_freq": pl.Int32,
-                    "r1": pl.String,
-                    "r1_freq": pl.Int32,
-                },
-            )
-
-        # Calculate frequencies
-        l1_freq_counter = Counter(l1_tokens)
-        r1_freq_counter = Counter(r1_tokens)
-
-        # Second pass: add frequency information
-        for row in conc_table:
-            row["l1_freq"] = l1_freq_counter.get(row["l1"], 0)
-            row["r1_freq"] = r1_freq_counter.get(row["r1"], 0)
-
-        return pl.DataFrame(conc_table)
+        df = df.join(l1_counts, on="l1", how="left").join(
+            r1_counts, on="r1", how="left"
+        )
+        df = df.with_columns([
+            pl.col("l1_freq").fill_null(0).cast(pl.Int32),
+            pl.col("r1_freq").fill_null(0).cast(pl.Int32),
+        ])
+        return df
 
     def frequency_analysis(
         self,
@@ -594,35 +689,29 @@ class TextDataFrameNamespace:
             group_cols = ["time_period"] + group_by_columns
 
         # Perform aggregation
-        result_df = df_with_period.group_by(group_cols).agg(
-            [
-                pl.len().alias("frequency_count"),
-                pl.col(time_column).min().alias("period_start"),
-                pl.col(time_column).max().alias("period_end"),
-            ]
-        )
+        result_df = df_with_period.group_by(group_cols).agg([
+            pl.len().alias("frequency_count"),
+            pl.col(time_column).min().alias("period_start"),
+            pl.col(time_column).max().alias("period_end"),
+        ])
 
         # Add formatted time period for display
         if frequency == "weekly":
-            result_df = result_df.with_columns(
-                [
-                    pl.col("time_period")
-                    .dt.strftime("%Y-W%W")
-                    .alias("time_period_formatted")
-                ]
-            )
+            result_df = result_df.with_columns([
+                pl.col("time_period")
+                .dt.strftime("%Y-W%W")
+                .alias("time_period_formatted")
+            ])
         elif frequency in ["daily", "monthly"]:
-            result_df = result_df.with_columns(
-                [
-                    pl.col("time_period")
-                    .dt.strftime(time_format)
-                    .alias("time_period_formatted")
-                ]
-            )
+            result_df = result_df.with_columns([
+                pl.col("time_period")
+                .dt.strftime(time_format)
+                .alias("time_period_formatted")
+            ])
         else:  # yearly
-            result_df = result_df.with_columns(
-                [pl.col("time_period").cast(pl.String).alias("time_period_formatted")]
-            )
+            result_df = result_df.with_columns([
+                pl.col("time_period").cast(pl.String).alias("time_period_formatted")
+            ])
 
         # Sort by time if requested
         if sort_by_time:
@@ -729,6 +818,15 @@ class TextLazyFrameNamespace:
             .alias(f"{column}_contains")
         )
 
+    def quotation(self, column: str) -> pl.DataFrame:
+        """Extract quotations from a text column on a LazyFrame.
+
+        Collects the frame and returns a flat Polars DataFrame, mirroring
+        TextDataFrameNamespace.quotation.
+        """
+        collected = self._lf.collect()
+        return collected.text.quotation(column)
+
     def concordance(
         self,
         column: str,
@@ -760,131 +858,85 @@ class TextLazyFrameNamespace:
         Returns
         -------
         pl.DataFrame
-            DataFrame with columns: document_idx, left_context, matched_text, right_context, l1, l1_freq, r1, r1_freq
+            DataFrame with columns: left_context, matched_text, right_context, start_idx, end_idx, l1, l1_freq, r1, r1_freq
         """
-        import re
-        from collections import Counter
-
-        from .text_utils import simple_tokenize
-
         if len(search_word) == 0:
-            return pl.DataFrame(
-                {
-                    "document_idx": [],
-                    "left_context": [],
-                    "matched_text": [],
-                    "right_context": [],
-                    "l1": [],
-                    "l1_freq": [],
-                    "r1": [],
-                    "r1_freq": [],
-                },
-                schema={
-                    "document_idx": pl.Int32,
-                    "left_context": pl.String,
-                    "matched_text": pl.String,
-                    "right_context": pl.String,
-                    "l1": pl.String,
-                    "l1_freq": pl.Int32,
-                    "r1": pl.String,
-                    "r1_freq": pl.Int32,
-                },
-            )
+            return pl.DataFrame({
+                "left_context": pl.Series([], dtype=pl.String),
+                "matched_text": pl.Series([], dtype=pl.String),
+                "right_context": pl.Series([], dtype=pl.String),
+                "start_idx": pl.Series([], dtype=pl.Int64),
+                "end_idx": pl.Series([], dtype=pl.Int64),
+                "l1": pl.Series([], dtype=pl.String),
+                "l1_freq": pl.Series([], dtype=pl.Int32),
+                "r1": pl.Series([], dtype=pl.String),
+                "r1_freq": pl.Series([], dtype=pl.Int32),
+            })
 
-        # Create regex pattern
-        pattern = search_word if regex else re.escape(search_word)
-        flags = 0 if case_sensitive else re.IGNORECASE
-        searcher = re.compile(pattern, flags)
-
-        # Collect the LazyFrame and get the text column as a list
         collected_df = self._lf.collect()
-        texts = collected_df[column].to_list()
-
-        conc_table = []
-        l1_tokens = []  # Collect all L1 tokens for frequency calculation
-        r1_tokens = []  # Collect all R1 tokens for frequency calculation
-
-        # First pass: collect all matches and extract L1/R1 tokens
-        for idx, doc in enumerate(texts):
-            if doc is None:
-                continue
-
-            for match in searcher.finditer(doc):
-                matched_text = match.group(0)
-                left_text = doc[: match.start()]
-                right_text = doc[match.end() :]
-
-                # Tokenize left and right contexts
-                left_tokens = simple_tokenize(
-                    left_text, lowercase=False, remove_punct=False
-                )
-                right_tokens = simple_tokenize(
-                    right_text, lowercase=False, remove_punct=False
-                )
-
-                # Get the specified number of context tokens
-                left_context_tokens = (
-                    left_tokens[-num_left_tokens:] if num_left_tokens > 0 else []
-                )
-                right_context_tokens = (
-                    right_tokens[:num_right_tokens] if num_right_tokens > 0 else []
-                )
-
-                # Extract L1 and R1 tokens (first left and first right)
-                l1 = left_context_tokens[-1] if left_context_tokens else ""
-                r1 = right_context_tokens[0] if right_context_tokens else ""
-
-                conc_table.append(
-                    {
-                        "document_idx": idx,
-                        "left_context": " ".join(left_context_tokens),
-                        "matched_text": matched_text,
-                        "right_context": " ".join(right_context_tokens),
-                        "l1": l1,
-                        "r1": r1,
-                    }
-                )
-
-                # Collect for frequency calculation
-                if l1:
-                    l1_tokens.append(l1)
-                if r1:
-                    r1_tokens.append(r1)
-
-        if len(conc_table) == 0:
-            return pl.DataFrame(
-                {
-                    "document_idx": [],
-                    "left_context": [],
-                    "matched_text": [],
-                    "right_context": [],
-                    "l1": [],
-                    "l1_freq": [],
-                    "r1": [],
-                    "r1_freq": [],
-                },
-                schema={
-                    "document_idx": pl.Int32,
-                    "left_context": pl.String,
-                    "matched_text": pl.String,
-                    "right_context": pl.String,
-                    "l1": pl.String,
-                    "l1_freq": pl.Int32,
-                    "r1": pl.String,
-                    "r1_freq": pl.Int32,
-                },
+        tmp = collected_df.with_columns([
+            pl.col(column)
+            .text.concordance(
+                search_word,
+                num_left_tokens=num_left_tokens,
+                num_right_tokens=num_right_tokens,
+                regex=regex,
+                case_sensitive=case_sensitive,
             )
+            .alias("__concordance__")
+        ])
 
-        # Calculate frequencies
-        l1_freq_counter = Counter(l1_tokens)
-        r1_freq_counter = Counter(r1_tokens)
+        exploded = tmp.select([
+            pl.col("__concordance__").list.explode(),
+        ])
 
-        # Second pass: add frequency information
-        for row in conc_table:
-            row["l1_freq"] = l1_freq_counter.get(row["l1"], 0)
-            row["r1_freq"] = r1_freq_counter.get(row["r1"], 0)
+        if exploded.height == 0:
+            return pl.DataFrame({
+                "left_context": pl.Series([], dtype=pl.String),
+                "matched_text": pl.Series([], dtype=pl.String),
+                "right_context": pl.Series([], dtype=pl.String),
+                "start_idx": pl.Series([], dtype=pl.Int64),
+                "end_idx": pl.Series([], dtype=pl.Int64),
+                "l1": pl.Series([], dtype=pl.String),
+                "l1_freq": pl.Series([], dtype=pl.Int32),
+                "r1": pl.Series([], dtype=pl.String),
+                "r1_freq": pl.Series([], dtype=pl.Int32),
+            })
 
-        return pl.DataFrame(conc_table)
+        df = exploded.select([
+            pl.col("__concordance__")
+            .struct.field("left_context")
+            .alias("left_context"),
+            pl.col("__concordance__")
+            .struct.field("matched_text")
+            .alias("matched_text"),
+            pl.col("__concordance__")
+            .struct.field("right_context")
+            .alias("right_context"),
+            pl.col("__concordance__").struct.field("start_idx").alias("start_idx"),
+            pl.col("__concordance__").struct.field("end_idx").alias("end_idx"),
+            pl.col("__concordance__").struct.field("l1").alias("l1"),
+            pl.col("__concordance__").struct.field("r1").alias("r1"),
+        ])
+
+        # Compute frequencies for l1 and r1 across all rows
+        if df.height == 0:
+            return df.with_columns([
+                pl.lit(0).cast(pl.Int32).alias("l1_freq"),
+                pl.lit(0).cast(pl.Int32).alias("r1_freq"),
+            ])
+
+        l1_counts = df.group_by("l1").agg(pl.len().alias("l1_freq"))
+        r1_counts = df.group_by("r1").agg(pl.len().alias("r1_freq"))
+
+        df = df.join(l1_counts, on="l1", how="left").join(
+            r1_counts, on="r1", how="left"
+        )
+        df = df.with_columns([
+            pl.col("l1_freq").fill_null(0).cast(pl.Int32),
+            pl.col("r1_freq").fill_null(0).cast(pl.Int32),
+        ])
+        return df
 
     def frequency_analysis(
         self,
@@ -959,35 +1011,29 @@ class TextLazyFrameNamespace:
             group_cols = ["time_period"] + group_by_columns
 
         # Perform aggregation
-        result_lf = lf_with_period.group_by(group_cols).agg(
-            [
-                pl.len().alias("frequency_count"),
-                pl.col(time_column).min().alias("period_start"),
-                pl.col(time_column).max().alias("period_end"),
-            ]
-        )
+        result_lf = lf_with_period.group_by(group_cols).agg([
+            pl.len().alias("frequency_count"),
+            pl.col(time_column).min().alias("period_start"),
+            pl.col(time_column).max().alias("period_end"),
+        ])
 
         # Add formatted time period for display
         if frequency == "weekly":
-            result_lf = result_lf.with_columns(
-                [
-                    pl.col("time_period")
-                    .dt.strftime("%Y-W%W")
-                    .alias("time_period_formatted")
-                ]
-            )
+            result_lf = result_lf.with_columns([
+                pl.col("time_period")
+                .dt.strftime("%Y-W%W")
+                .alias("time_period_formatted")
+            ])
         elif frequency in ["daily", "monthly"]:
-            result_lf = result_lf.with_columns(
-                [
-                    pl.col("time_period")
-                    .dt.strftime(time_format)
-                    .alias("time_period_formatted")
-                ]
-            )
+            result_lf = result_lf.with_columns([
+                pl.col("time_period")
+                .dt.strftime(time_format)
+                .alias("time_period_formatted")
+            ])
         else:  # yearly
-            result_lf = result_lf.with_columns(
-                [pl.col("time_period").cast(pl.String).alias("time_period_formatted")]
-            )
+            result_lf = result_lf.with_columns([
+                pl.col("time_period").cast(pl.String).alias("time_period_formatted")
+            ])
 
         # Sort by time if requested
         if sort_by_time:
