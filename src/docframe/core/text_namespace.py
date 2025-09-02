@@ -28,7 +28,7 @@ class TextExprNamespace:
         self._expr = expr
 
     def tokenize(
-        self, lowercase: bool = True, remove_punct: bool = True, explode=False
+        self, lowercase: bool = True, remove_punct: bool = True, explode: bool = False
     ) -> pl.Expr:
         """Tokenize text into list of tokens"""
 
@@ -480,54 +480,33 @@ class TextDataFrameNamespace:
             .alias(f"{column}_contains")
         )
 
-    def quotation(self, column: str) -> pl.DataFrame:
+    def quotation(
+        self, column: str, *, explode: bool = False, unnest: bool = False
+    ) -> pl.DataFrame:
         """Extract quotations from a text column using heuristics.
 
-        Returns a flat DataFrame with one row per extracted quote and columns:
-        speaker, speaker_start_idx, speaker_end_idx, quote, quote_start_idx,
-        quote_end_idx, verb, verb_start_idx, verb_end_idx, quote_type
+        Behavior:
+        - explode=False: produce a single '__quotation__' column (List[Struct]).
+          Requires unnest=True; otherwise raises ValueError.
+        - explode=True: produce an expanded table with list.explode, keeping original
+          columns; if unnest=True, expand the struct fields into separate columns,
+          otherwise keep the '__quotation__' struct column as-is.
         """
+        tmp = self._df.with_columns(
+            pl.col(column).text.quotation().alias("__quotation__")
+        )
 
-        tmp = self._df.with_columns([
-            pl.col(column).text.quotation().alias("__quotes__")
-        ])
+        if not explode:
+            if not unnest:
+                raise ValueError("explode=False requires unnest=True for quotation")
+            # Return only the special column
+            return tmp.select([pl.col("__quotation__")])
 
-        exploded = tmp.select([
-            pl.col("__quotes__").list.explode(),
-        ])
-
-        if exploded.height == 0:
-            return pl.DataFrame({
-                "speaker": pl.Series([], dtype=pl.String),
-                "speaker_start_idx": pl.Series([], dtype=pl.Int64),
-                "speaker_end_idx": pl.Series([], dtype=pl.Int64),
-                "quote": pl.Series([], dtype=pl.String),
-                "quote_start_idx": pl.Series([], dtype=pl.Int64),
-                "quote_end_idx": pl.Series([], dtype=pl.Int64),
-                "verb": pl.Series([], dtype=pl.String),
-                "verb_start_idx": pl.Series([], dtype=pl.Int64),
-                "verb_end_idx": pl.Series([], dtype=pl.Int64),
-                "quote_type": pl.Series([], dtype=pl.String),
-            })
-
-        return exploded.select([
-            pl.col("__quotes__").struct.field("speaker").alias("speaker"),
-            pl.col("__quotes__")
-            .struct.field("speaker_start_idx")
-            .alias("speaker_start_idx"),
-            pl.col("__quotes__")
-            .struct.field("speaker_end_idx")
-            .alias("speaker_end_idx"),
-            pl.col("__quotes__").struct.field("quote").alias("quote"),
-            pl.col("__quotes__")
-            .struct.field("quote_start_idx")
-            .alias("quote_start_idx"),
-            pl.col("__quotes__").struct.field("quote_end_idx").alias("quote_end_idx"),
-            pl.col("__quotes__").struct.field("verb").alias("verb"),
-            pl.col("__quotes__").struct.field("verb_start_idx").alias("verb_start_idx"),
-            pl.col("__quotes__").struct.field("verb_end_idx").alias("verb_end_idx"),
-            pl.col("__quotes__").struct.field("quote_type").alias("quote_type"),
-        ])
+        # explode=True: keep original columns
+        exploded = tmp.explode("__quotation__")
+        if unnest:
+            return exploded.unnest("__quotation__")
+        return exploded
 
     def concordance(
         self,
@@ -537,22 +516,71 @@ class TextDataFrameNamespace:
         num_right_tokens: int = 10,
         regex: bool = False,
         case_sensitive: bool = False,
+        *,
+        explode: bool = False,
+        unnest: bool = False,
     ) -> pl.DataFrame:
+        # Special-case: empty search word
         if len(search_word) == 0:
-            return pl.DataFrame({
-                "left_context": pl.Series([], dtype=pl.String),
-                "matched_text": pl.Series([], dtype=pl.String),
-                "right_context": pl.Series([], dtype=pl.String),
-                "start_idx": pl.Series([], dtype=pl.Int64),
-                "end_idx": pl.Series([], dtype=pl.Int64),
-                "l1": pl.Series([], dtype=pl.String),
-                "l1_freq": pl.Series([], dtype=pl.Int32),
-                "r1": pl.Series([], dtype=pl.String),
-                "r1_freq": pl.Series([], dtype=pl.Int32),
-            })
+            if not explode:
+                if not unnest:
+                    raise ValueError(
+                        "explode=False requires unnest=True for concordance"
+                    )
+                # Return a single column with empty lists per row
+                return self._df.select([
+                    pl.lit(
+                        pl.Series(
+                            [],
+                            dtype=pl.Struct([
+                                pl.Field("left_context", pl.String),
+                                pl.Field("matched_text", pl.String),
+                                pl.Field("right_context", pl.String),
+                                pl.Field("start_idx", pl.Int64),
+                                pl.Field("end_idx", pl.Int64),
+                                pl.Field("l1", pl.String),
+                                pl.Field("r1", pl.String),
+                            ]),
+                        )
+                    )
+                    .repeat_by(pl.len())
+                    .explode()
+                    .alias("__concordance__")
+                ])
+            # explode=True
+            if unnest:
+                # Empty expanded table with expected columns
+                return pl.DataFrame({
+                    "left_context": pl.Series([], dtype=pl.String),
+                    "matched_text": pl.Series([], dtype=pl.String),
+                    "right_context": pl.Series([], dtype=pl.String),
+                    "start_idx": pl.Series([], dtype=pl.Int64),
+                    "end_idx": pl.Series([], dtype=pl.Int64),
+                    "l1": pl.Series([], dtype=pl.String),
+                    "l1_freq": pl.Series([], dtype=pl.Int32),
+                    "r1": pl.Series([], dtype=pl.String),
+                    "r1_freq": pl.Series([], dtype=pl.Int32),
+                })
+            # explode=True, unnest=False -> keep original columns with zero rows
+            # Achieve by filtering to zero rows cheaply
+            return self._df.filter(pl.lit(False)).with_columns([
+                pl.col(column)
+                .map_elements(
+                    lambda _: None,
+                    return_dtype=pl.Struct([
+                        pl.Field("left_context", pl.String),
+                        pl.Field("matched_text", pl.String),
+                        pl.Field("right_context", pl.String),
+                        pl.Field("start_idx", pl.Int64),
+                        pl.Field("end_idx", pl.Int64),
+                        pl.Field("l1", pl.String),
+                        pl.Field("r1", pl.String),
+                    ]),
+                )
+                .alias("__concordance__")
+            ])
 
-        # Use expression-level concordance and explode
-        tmp = self._df.with_columns([
+        tmp = self._df.with_columns(
             pl.col(column)
             .text.concordance(
                 search_word,
@@ -562,46 +590,28 @@ class TextDataFrameNamespace:
                 case_sensitive=case_sensitive,
             )
             .alias("__concordance__")
-        ])
+        )
 
-        exploded = tmp.select([
-            pl.col("__concordance__").list.explode(),
-        ])
+        if not isinstance(explode, bool) or not isinstance(unnest, bool):  # type: ignore[arg-type]
+            raise TypeError("explode and unnest must be booleans")
 
-        if exploded.height == 0:
-            return pl.DataFrame({
-                "left_context": pl.Series([], dtype=pl.String),
-                "matched_text": pl.Series([], dtype=pl.String),
-                "right_context": pl.Series([], dtype=pl.String),
-                "start_idx": pl.Series([], dtype=pl.Int64),
-                "end_idx": pl.Series([], dtype=pl.Int64),
-                "l1": pl.Series([], dtype=pl.String),
-                "l1_freq": pl.Series([], dtype=pl.Int32),
-                "r1": pl.Series([], dtype=pl.String),
-                "r1_freq": pl.Series([], dtype=pl.Int32),
-            })
+        if not explode:
+            if not unnest:
+                raise ValueError("explode=False requires unnest=True for concordance")
+            return tmp.select([pl.col("__concordance__")])
 
-        df = exploded.select([
-            pl.col("__concordance__")
-            .struct.field("left_context")
-            .alias("left_context"),
-            pl.col("__concordance__")
-            .struct.field("matched_text")
-            .alias("matched_text"),
-            pl.col("__concordance__")
-            .struct.field("right_context")
-            .alias("right_context"),
-            pl.col("__concordance__").struct.field("start_idx").alias("start_idx"),
-            pl.col("__concordance__").struct.field("end_idx").alias("end_idx"),
-            pl.col("__concordance__").struct.field("l1").alias("l1"),
-            pl.col("__concordance__").struct.field("r1").alias("r1"),
-        ])
+        # explode == True: keep original columns
+        exploded = tmp.explode("__concordance__")
+        if not unnest:
+            return exploded
 
-        # Compute frequencies for l1 and r1 across all rows
+        # unnest the struct and compute l1/r1 frequencies
+        df = exploded.unnest("__concordance__")
         if df.height == 0:
+            # Ensure frequency columns exist even for empty results
             return df.with_columns([
-                pl.lit(0).cast(pl.Int32).alias("l1_freq"),
-                pl.lit(0).cast(pl.Int32).alias("r1_freq"),
+                pl.lit(None).cast(pl.Int32).alias("l1_freq"),
+                pl.lit(None).cast(pl.Int32).alias("r1_freq"),
             ])
 
         l1_counts = df.group_by("l1").agg(pl.len().alias("l1_freq"))
@@ -818,14 +828,15 @@ class TextLazyFrameNamespace:
             .alias(f"{column}_contains")
         )
 
-    def quotation(self, column: str) -> pl.DataFrame:
+    def quotation(
+        self, column: str, *, explode: bool = False, unnest: bool = False
+    ) -> pl.DataFrame:
         """Extract quotations from a text column on a LazyFrame.
 
-        Collects the frame and returns a flat Polars DataFrame, mirroring
-        TextDataFrameNamespace.quotation.
+        Collects and delegates to DataFrame namespace with explode/unnest.
         """
         collected = self._lf.collect()
-        return collected.text.quotation(column)
+        return collected.text.quotation(column, explode=explode, unnest=unnest)
 
     def concordance(
         self,
@@ -835,108 +846,21 @@ class TextLazyFrameNamespace:
         num_right_tokens: int = 10,
         regex: bool = False,
         case_sensitive: bool = False,
+        *,
+        explode: bool = False,
+        unnest: bool = False,
     ) -> pl.DataFrame:
-        """
-        Generate a concordance table for a search word/pattern in a text column.
-        Note: This method collects the LazyFrame to perform the concordance analysis.
-
-        Parameters
-        ----------
-        column : str
-            Name of the text column to search in
-        search_word : str
-            Word or pattern to search for
-        num_left_tokens : int, default 10
-            Number of tokens to include in left context
-        num_right_tokens : int, default 10
-            Number of tokens to include in right context
-        regex : bool, default False
-            Whether to treat search_word as a regex pattern
-        case_sensitive : bool, default False
-            Whether the search should be case sensitive
-
-        Returns
-        -------
-        pl.DataFrame
-            DataFrame with columns: left_context, matched_text, right_context, start_idx, end_idx, l1, l1_freq, r1, r1_freq
-        """
-        if len(search_word) == 0:
-            return pl.DataFrame({
-                "left_context": pl.Series([], dtype=pl.String),
-                "matched_text": pl.Series([], dtype=pl.String),
-                "right_context": pl.Series([], dtype=pl.String),
-                "start_idx": pl.Series([], dtype=pl.Int64),
-                "end_idx": pl.Series([], dtype=pl.Int64),
-                "l1": pl.Series([], dtype=pl.String),
-                "l1_freq": pl.Series([], dtype=pl.Int32),
-                "r1": pl.Series([], dtype=pl.String),
-                "r1_freq": pl.Series([], dtype=pl.Int32),
-            })
-
-        collected_df = self._lf.collect()
-        tmp = collected_df.with_columns([
-            pl.col(column)
-            .text.concordance(
-                search_word,
-                num_left_tokens=num_left_tokens,
-                num_right_tokens=num_right_tokens,
-                regex=regex,
-                case_sensitive=case_sensitive,
-            )
-            .alias("__concordance__")
-        ])
-
-        exploded = tmp.select([
-            pl.col("__concordance__").list.explode(),
-        ])
-
-        if exploded.height == 0:
-            return pl.DataFrame({
-                "left_context": pl.Series([], dtype=pl.String),
-                "matched_text": pl.Series([], dtype=pl.String),
-                "right_context": pl.Series([], dtype=pl.String),
-                "start_idx": pl.Series([], dtype=pl.Int64),
-                "end_idx": pl.Series([], dtype=pl.Int64),
-                "l1": pl.Series([], dtype=pl.String),
-                "l1_freq": pl.Series([], dtype=pl.Int32),
-                "r1": pl.Series([], dtype=pl.String),
-                "r1_freq": pl.Series([], dtype=pl.Int32),
-            })
-
-        df = exploded.select([
-            pl.col("__concordance__")
-            .struct.field("left_context")
-            .alias("left_context"),
-            pl.col("__concordance__")
-            .struct.field("matched_text")
-            .alias("matched_text"),
-            pl.col("__concordance__")
-            .struct.field("right_context")
-            .alias("right_context"),
-            pl.col("__concordance__").struct.field("start_idx").alias("start_idx"),
-            pl.col("__concordance__").struct.field("end_idx").alias("end_idx"),
-            pl.col("__concordance__").struct.field("l1").alias("l1"),
-            pl.col("__concordance__").struct.field("r1").alias("r1"),
-        ])
-
-        # Compute frequencies for l1 and r1 across all rows
-        if df.height == 0:
-            return df.with_columns([
-                pl.lit(0).cast(pl.Int32).alias("l1_freq"),
-                pl.lit(0).cast(pl.Int32).alias("r1_freq"),
-            ])
-
-        l1_counts = df.group_by("l1").agg(pl.len().alias("l1_freq"))
-        r1_counts = df.group_by("r1").agg(pl.len().alias("r1_freq"))
-
-        df = df.join(l1_counts, on="l1", how="left").join(
-            r1_counts, on="r1", how="left"
+        collected = self._lf.collect()
+        return collected.text.concordance(
+            column,
+            search_word,
+            num_left_tokens=num_left_tokens,
+            num_right_tokens=num_right_tokens,
+            regex=regex,
+            case_sensitive=case_sensitive,
+            explode=explode,
+            unnest=unnest,
         )
-        df = df.with_columns([
-            pl.col("l1_freq").fill_null(0).cast(pl.Int32),
-            pl.col("r1_freq").fill_null(0).cast(pl.Int32),
-        ])
-        return df
 
     def frequency_analysis(
         self,

@@ -260,7 +260,9 @@ class TestDocDataFrame:
         df = pl.DataFrame(data)
 
         # Test basic concordance
-        concordance_result = df.text.concordance("text", "fox")
+        concordance_result = df.text.concordance(
+            "text", "fox", explode=True, unnest=True
+        )
 
         assert isinstance(concordance_result, pl.DataFrame)
         assert len(concordance_result) == 3  # Should find 3 matches
@@ -276,24 +278,31 @@ class TestDocDataFrame:
 
         # Test case sensitive search
         concordance_case = df.text.concordance(
-            "text", "Fox", case_sensitive=True
+            "text", "Fox", case_sensitive=True, explode=True, unnest=True
         ).drop_nulls()
         assert (
             len(concordance_case) == 0
         )  # Should find no matches with case sensitivity
 
         # Test regex search
-        concordance_regex = df.text.concordance("text", r"fox|dog", regex=True)
+        concordance_regex = df.text.concordance(
+            "text", r"fox|dog", regex=True, explode=True, unnest=True
+        )
         assert len(concordance_regex) == 4  # Should find both "fox" and "dog"
 
         # Test with limited context
         concordance_limited = df.text.concordance(
-            "text", "fox", num_left_tokens=2, num_right_tokens=2
+            "text",
+            "fox",
+            num_left_tokens=2,
+            num_right_tokens=2,
+            explode=True,
+            unnest=True,
         )
         assert len(concordance_limited) == 3
 
         # Test empty search word
-        concordance_empty = df.text.concordance("text", "")
+        concordance_empty = df.text.concordance("text", "", explode=True, unnest=True)
         assert len(concordance_empty) == 0
         assert list(concordance_empty.columns) == [
             "left_context",

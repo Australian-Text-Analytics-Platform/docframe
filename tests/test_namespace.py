@@ -98,7 +98,7 @@ def test_dataframe_quotation():
         "id": [1, 2, 3],
     })
 
-    out = df.text.quotation("text")
+    out = df.text.quotation("text", explode=True, unnest=True)
     # Schema columns expected
     expected = {
         "speaker",
