@@ -276,11 +276,38 @@ class _DocumentColumnMixin:
 
         # Text-specific methods that operate on the document column
 
-    def tokenize(self, lowercase: bool = True, remove_punct: bool = True) -> pl.Series:
-        """Tokenize documents."""
-        return self._df.tokenize(
-            column=self.document_column, lowercase=lowercase, remove_punct=remove_punct
-        )
+    def _require_document_column(self) -> str:
+        col = getattr(self, "_document_column_name", None)
+        if not col:
+            raise ValueError("No document column available")
+        return col
+
+    def tokenize(self, *args, **kwargs):
+        """Tokenize the active document column via DataFrame/LazyFrame namespace.
+
+        Returns underlying Polars frame type (DataFrame or LazyFrame) with a
+        '<doc_col>_tokens' column, matching the namespace behavior.
+        """
+        col = self._require_document_column()
+        return self._df.text.tokenize(col, *args, **kwargs)  # type: ignore[attr-defined]
+
+    def concordance(self, *args, **kwargs) -> pl.DataFrame:
+        """Concordance table for the active document column.
+
+        Delegates to the DataFrame/LazyFrame text namespace using the configured
+        document column. Returns a flat Polars DataFrame.
+        """
+        col = self._require_document_column()
+        return self._df.text.concordance(col, *args, **kwargs)  # type: ignore[attr-defined]
+
+    def quotation(self, *args, **kwargs) -> pl.DataFrame:
+        """Extract quotations from the active document column.
+
+        Delegates to the DataFrame/LazyFrame text namespace using the configured
+        document column. Returns a flat Polars DataFrame.
+        """
+        col = self._require_document_column()
+        return self._df.text.quotation(col, *args, **kwargs)  # type: ignore[attr-defined]
 
 
 class DocDataFrame(_DocumentColumnMixin):
