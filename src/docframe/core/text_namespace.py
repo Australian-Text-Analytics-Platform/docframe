@@ -520,13 +520,12 @@ class TextDataFrameNamespace:
         explode: bool = False,
         unnest: bool = False,
     ) -> pl.DataFrame:
+        if unnest and not explode:
+            raise ValueError("unnest=True requires explode=True for concordance")
+
         # Special-case: empty search word
         if len(search_word) == 0:
             if not explode:
-                if not unnest:
-                    raise ValueError(
-                        "explode=False requires unnest=True for concordance"
-                    )
                 # Return a single column with empty lists per row
                 return self._df.select([
                     pl.lit(
@@ -592,12 +591,8 @@ class TextDataFrameNamespace:
             .alias("__concordance__")
         )
 
-        if not isinstance(explode, bool) or not isinstance(unnest, bool):  # type: ignore[arg-type]
-            raise TypeError("explode and unnest must be booleans")
-
+        # Handle explode=False case
         if not explode:
-            if not unnest:
-                raise ValueError("explode=False requires unnest=True for concordance")
             return tmp.select([pl.col("__concordance__")])
 
         # explode == True: keep original columns
