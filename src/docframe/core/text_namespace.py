@@ -185,6 +185,8 @@ class TextExprNamespace:
                     pl.Field("verb_start_idx", pl.Int64),
                     pl.Field("verb_end_idx", pl.Int64),
                     pl.Field("quote_type", pl.String),
+                    pl.Field("quote_token_count", pl.Int64),
+                    pl.Field("is_floating_quote", pl.Boolean),
                 ])
             ),
         )

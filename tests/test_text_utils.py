@@ -277,6 +277,8 @@ class TestQuotationElements:
             "verb_start_idx",
             "verb_end_idx",
             "quote_type",
+            "quote_token_count",
+            "is_floating_quote",
         }
         assert required.issubset(set(q.keys()))
         # Quote contains the quoted text including quotes
@@ -318,3 +320,24 @@ class TestQuotationElements:
 
     def test_no_quotes_returns_empty(self):
         assert quotation_elements("No quotations present here.") == []
+
+    def test_quote_type_pattern(self):
+        text = 'Mary Johnson, the spokesperson, said, "We are ready."'
+        quotes = quotation_elements(text)
+        assert quotes
+        pattern = quotes[0]["quote_type"]
+        assert pattern
+        # Expect positional signature comprised of Q, C, V, S markers
+        assert set(pattern).issubset(set("QCSV"))
+        assert pattern.count("Q") >= 2
+
+    def test_floating_quote_inheritance(self):
+        text = 'Alex Lee stated, "First statement." "Second statement."'
+        quotes = quotation_elements(text)
+        assert len(quotes) >= 2
+        first, second = quotes[0], quotes[1]
+        assert first["speaker"].startswith("Alex")
+        assert second["is_floating_quote"] is True
+        assert second["speaker"] == first["speaker"]
+        assert second["speaker_start_idx"] == first["speaker_start_idx"]
+        assert second["speaker_end_idx"] == first["speaker_end_idx"]

@@ -6,13 +6,14 @@ import os
 import re
 import string
 import warnings
+from dataclasses import dataclass
 from functools import reduce
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple, Union
 
 import nltk
 import numpy as np
 import polars as pl
-from nltk.tokenize import TreebankWordDetokenizer, word_tokenize
+from nltk.tokenize import TreebankWordDetokenizer, TreebankWordTokenizer, word_tokenize
 from sklearn.preprocessing import MinMaxScaler
 
 # Suppress sklearn deprecation warnings
@@ -37,7 +38,10 @@ except Exception:  # pragma: no cover - environment without umap
 UMAP = None  # type: ignore
 
 _NLTK_PUNKT_READY = False
+_NLTK_POS_READY = False
 _DETOKENIZER = TreebankWordDetokenizer()
+_TREEBANK_TOKENIZER = TreebankWordTokenizer()
+_PUNKT_SENTENCE_TOKENIZER = None
 
 
 def _ensure_nltk_punkt() -> None:
@@ -55,6 +59,46 @@ def _ensure_nltk_punkt() -> None:
             # punkt_tab is optional; ignore download failures to remain offline-friendly
             pass
         _NLTK_PUNKT_READY = True
+
+
+def _ensure_nltk_pos_tagger() -> None:
+    global _NLTK_POS_READY
+    if _NLTK_POS_READY:
+        return
+    tagger_paths = [
+        "taggers/averaged_perceptron_tagger",
+        "taggers/averaged_perceptron_tagger_eng",
+    ]
+    found_any = False
+    for path in tagger_paths:
+        try:
+            nltk.data.find(path)
+            found_any = True
+        except LookupError:
+            resource_name = path.split("/")[-1]
+            try:
+                nltk.download(resource_name, quiet=True)
+                nltk.data.find(path)
+                found_any = True
+            except Exception:
+                # Some environments provide only one of the taggers; continue trying others
+                continue
+    if found_any:
+        _NLTK_POS_READY = True
+
+
+def _get_sentence_tokenizer():
+    global _PUNKT_SENTENCE_TOKENIZER
+    if _PUNKT_SENTENCE_TOKENIZER is None:
+        _ensure_nltk_punkt()
+        try:
+            _PUNKT_SENTENCE_TOKENIZER = nltk.data.load(
+                "tokenizers/punkt/english.pickle"
+            )
+        except LookupError:
+            # Fallback: instantiate a default PunktSentenceTokenizer
+            _PUNKT_SENTENCE_TOKENIZER = nltk.tokenize.PunktSentenceTokenizer()
+    return _PUNKT_SENTENCE_TOKENIZER
 
 
 def tokenize(text: str, lowercase: bool = True, remove_punct: bool = True) -> List[str]:
@@ -156,32 +200,396 @@ def contains_pattern(text: str, pattern: str, case_sensitive: bool = False) -> b
 # -----------------------------
 
 
+class _TokenInfo(NamedTuple):
+    text: str
+    start: int
+    end: int
+    pos: str
+    sentence_index: int
+
+
+class _SentenceInfo(NamedTuple):
+    index: int
+    start: int
+    end: int
+    text: str
+
+
+@dataclass
+class _QuoteRecord:
+    speaker: str
+    speaker_start_idx: int
+    speaker_end_idx: int
+    quote: str
+    quote_start_idx: int
+    quote_end_idx: int
+    verb: str
+    verb_start_idx: int
+    verb_end_idx: int
+    quote_type: str
+    quote_token_count: int
+    is_floating_quote: bool
+    sentence_index: int
+
+    def to_public_dict(self) -> Dict[str, Any]:
+        return {
+            "speaker": self.speaker,
+            "speaker_start_idx": int(self.speaker_start_idx),
+            "speaker_end_idx": int(self.speaker_end_idx),
+            "quote": self.quote,
+            "quote_start_idx": int(self.quote_start_idx),
+            "quote_end_idx": int(self.quote_end_idx),
+            "verb": self.verb,
+            "verb_start_idx": int(self.verb_start_idx),
+            "verb_end_idx": int(self.verb_end_idx),
+            "quote_type": self.quote_type,
+            "quote_token_count": int(self.quote_token_count),
+            "is_floating_quote": bool(self.is_floating_quote),
+        }
+
+
+_TITLE_WORDS = {
+    "mr",
+    "mrs",
+    "ms",
+    "dr",
+    "prof",
+    "sir",
+    "madam",
+    "president",
+    "minister",
+    "senator",
+    "sen",
+    "rep",
+    "capt",
+    "gen",
+    "gov",
+    "amb",
+    "lord",
+    "lady",
+}
+
+_BOUNDARY_TOKENS = {",", ";", ":", "-", "—", "–", ".", "!", "?"}
+_ALLOWED_PRONOUN_SPEAKERS = {"he", "she", "they", "him", "her", "them"}
+_INVALID_SPEAKER_WORDS = {"i", "we"}
+_QUOTE_CHAR_PATTERN = re.compile(r"[\"“”«»„‟]")
+_QUOTE_PAIR_THRESHOLD = 200
+_VERB_WINDOW_CHARS = 200
+_SPEAKER_HOP_LIMIT = 60
+_MIN_QUOTE_TOKEN_COUNT = 3
+
+
+def _prepare_tokens_and_sentences(
+    text: str,
+) -> Tuple[List[_TokenInfo], List[_SentenceInfo]]:
+    _ensure_nltk_punkt()
+    _ensure_nltk_pos_tagger()
+
+    sentence_tokenizer = _get_sentence_tokenizer()
+    tokens: List[_TokenInfo] = []
+    sentences: List[_SentenceInfo] = []
+
+    for idx, (start, end) in enumerate(sentence_tokenizer.span_tokenize(text)):
+        sent_text = text[start:end]
+        spans = list(_TREEBANK_TOKENIZER.span_tokenize(sent_text))
+        words = [sent_text[s:e] for s, e in spans]
+        if words:
+            try:
+                pos_tags = [tag for _, tag in nltk.pos_tag(words)]
+            except LookupError:
+                # Retry after forcing tagger availability (handles environments missing default models)
+                global _NLTK_POS_READY
+                _NLTK_POS_READY = False
+                _ensure_nltk_pos_tagger()
+                pos_tags = [tag for _, tag in nltk.pos_tag(words)]
+        else:
+            pos_tags = []
+
+        for (tok_start, tok_end), word, pos in zip(spans, words, pos_tags):
+            tokens.append(
+                _TokenInfo(
+                    text=word,
+                    start=start + tok_start,
+                    end=start + tok_end,
+                    pos=pos,
+                    sentence_index=idx,
+                )
+            )
+
+        sentences.append(_SentenceInfo(index=idx, start=start, end=end, text=sent_text))
+
+    return tokens, sentences
+
+
+def _detect_quote_spans(text: str) -> List[Tuple[int, int]]:
+    spans: List[Tuple[int, int]] = []
+    open_idx: Optional[int] = None
+    for match in _QUOTE_CHAR_PATTERN.finditer(text):
+        if open_idx is None:
+            open_idx = match.start()
+        else:
+            spans.append((open_idx, match.end()))
+            open_idx = None
+    return spans
+
+
+def _count_tokens_in_span(span_text: str) -> int:
+    return sum(1 for _ in _TREEBANK_TOKENIZER.span_tokenize(span_text))
+
+
+def _token_distance(start: int, end: int, span_start: int, span_end: int) -> int:
+    if end <= span_start:
+        return span_start - end
+    if start >= span_end:
+        return start - span_end
+    return 0
+
+
+def _find_nearest_verb(
+    tokens: List[_TokenInfo],
+    verbs: set[str],
+    span_start: int,
+    span_end: int,
+    target_sentence_idx: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    window_start = max(0, span_start - _VERB_WINDOW_CHARS)
+    window_end = span_end + _VERB_WINDOW_CHARS
+    candidates: List[Tuple[int, int, int, str, int, int]] = []
+
+    for idx, token in enumerate(tokens):
+        if token.end < window_start:
+            continue
+        if token.start > window_end:
+            break
+
+        if (
+            target_sentence_idx is not None
+            and token.sentence_index != target_sentence_idx
+        ):
+            continue
+
+        # Skip tokens that overlap the quote span; we only want context verbs
+        if not (token.end <= span_start or token.start >= span_end):
+            continue
+
+        lower = token.text.lower()
+
+        if lower == "according" and (idx + 1) < len(tokens):
+            next_token = tokens[idx + 1]
+            if (
+                target_sentence_idx is not None
+                and next_token.sentence_index != target_sentence_idx
+            ):
+                continue
+            if not (next_token.end <= span_start or next_token.start >= span_end):
+                continue
+            if next_token.text.lower() == "to":
+                vs = token.start
+                ve = next_token.end
+                dist = _token_distance(vs, ve, span_start, span_end)
+                candidates.append((dist, vs, ve, "according to", idx, idx + 1))
+                continue
+
+        # Ignore non-alphabetic tokens that POS tagging mislabels as verbs
+        has_alpha = any(ch.isalpha() for ch in token.text)
+        if not has_alpha:
+            continue
+
+        is_candidate = lower in verbs or token.pos.startswith("VB")
+        if lower in {"is", "was", "be"}:
+            is_candidate = False
+        if not is_candidate:
+            continue
+
+        vs, ve = token.start, token.end
+        dist = _token_distance(vs, ve, span_start, span_end)
+        candidates.append((dist, vs, ve, token.text, idx, idx))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda x: (x[0], x[1]))
+    dist, vs, ve, verb_text, token_idx, token_end_idx = candidates[0]
+    return {
+        "verb": verb_text,
+        "verb_start": vs,
+        "verb_end": ve,
+        "token_index": token_idx,
+        "token_end_index": token_end_idx,
+        "distance": dist,
+    }
+
+
+def _is_name_token(token: _TokenInfo) -> bool:
+    text = token.text
+    if not text:
+        return False
+    stripped = text.rstrip(".")
+    if token.pos in {"NNP", "NNPS"}:
+        return True
+    if stripped and stripped[0].isupper() and any(c.isalpha() for c in stripped):
+        return True
+    if len(stripped) > 1 and stripped.isupper() and stripped.isalpha():
+        return True
+    if stripped.lower() in _TITLE_WORDS:
+        return True
+    return False
+
+
+def _is_pronoun_token(token: _TokenInfo) -> bool:
+    lower = token.text.lower()
+    return token.pos in {"PRP", "PRP$"} and lower not in _INVALID_SPEAKER_WORDS
+
+
+def _find_speaker_near(
+    text: str,
+    tokens: List[_TokenInfo],
+    verb_index: int,
+    verb_end_index: int,
+    direction: str,
+) -> Tuple[str, int, int]:
+    if direction == "left":
+        idx = verb_index - 1
+        hops = 0
+        while idx >= 0 and hops < _SPEAKER_HOP_LIMIT:
+            token = tokens[idx]
+            if token.text in _BOUNDARY_TOKENS:
+                break
+            if _is_name_token(token):
+                end_idx = idx
+                while end_idx + 1 < len(tokens) and _is_name_token(tokens[end_idx + 1]):
+                    end_idx += 1
+                start_idx = idx
+                while start_idx - 1 >= 0 and _is_name_token(tokens[start_idx - 1]):
+                    start_idx -= 1
+                start = tokens[start_idx].start
+                end = tokens[end_idx].end
+                return text[start:end], start, end
+            if _is_pronoun_token(token):
+                return text[token.start : token.end], token.start, token.end
+            idx -= 1
+            hops += 1
+    else:
+        idx = verb_end_index + 1
+        hops = 0
+        while idx < len(tokens) and hops < _SPEAKER_HOP_LIMIT:
+            token = tokens[idx]
+            if token.text in _BOUNDARY_TOKENS:
+                break
+            if _is_name_token(token):
+                end_idx = idx
+                while end_idx + 1 < len(tokens) and _is_name_token(tokens[end_idx + 1]):
+                    end_idx += 1
+                start = tokens[idx].start
+                end = tokens[end_idx].end
+                return text[start:end], start, end
+            if _is_pronoun_token(token):
+                return text[token.start : token.end], token.start, token.end
+            idx += 1
+            hops += 1
+    return "", -1, -1
+
+
+def _compute_quote_type(
+    quote_start: int,
+    quote_end: int,
+    verb_start: int,
+    verb_end: int,
+    speaker_start: int,
+    speaker_end: int,
+) -> str:
+    positions: List[Tuple[str, float]] = []
+    if quote_start >= 0:
+        positions.append(("Q", float(quote_start)))
+    content_mid = (
+        (quote_start + quote_end) / 2 if quote_end > quote_start else quote_start
+    )
+    positions.append(("C", float(content_mid)))
+    if quote_end >= 0:
+        positions.append(("q", float(quote_end)))
+    if verb_start >= 0 and verb_end >= 0:
+        positions.append(("V", float((verb_start + verb_end) / 2)))
+    if speaker_start >= 0 and speaker_end >= 0:
+        positions.append(("S", float((speaker_start + speaker_end) / 2)))
+    positions.sort(key=lambda x: (x[1], x[0]))
+    return "".join(code for code, _ in positions).replace("q", "Q")
+
+
+def _inherit_floating_quotes(
+    records: List[_QuoteRecord],
+    sentences: List[_SentenceInfo],
+) -> List[_QuoteRecord]:
+    if not records:
+        return records
+
+    records_sorted = sorted(records, key=lambda r: r.quote_start_idx)
+    last_structured: Optional[_QuoteRecord] = None
+
+    for record in records_sorted:
+        sentence_idx = record.sentence_index
+        sentence = (
+            sentences[sentence_idx] if 0 <= sentence_idx < len(sentences) else None
+        )
+        sentence_starts_with_quote = False
+        if sentence:
+            stripped = sentence.text.lstrip()
+            sentence_starts_with_quote = stripped.startswith(
+                '"'
+            ) or stripped.startswith("“")
+
+        can_inherit = (
+            last_structured is not None
+            and bool(last_structured.speaker)
+            and sentence_idx - last_structured.sentence_index <= 5
+            and not record.speaker
+            and not record.verb
+            and sentence_starts_with_quote
+        )
+
+        if can_inherit:
+            record.speaker = last_structured.speaker
+            record.speaker_start_idx = last_structured.speaker_start_idx
+            record.speaker_end_idx = last_structured.speaker_end_idx
+            record.is_floating_quote = True
+
+        if record.verb or record.speaker:
+            last_structured = record
+
+    return records_sorted
+
+
+def _deduplicate_quotes(records: List[_QuoteRecord]) -> List[_QuoteRecord]:
+    if not records:
+        return []
+
+    sorted_by_span = sorted(
+        records,
+        key=lambda r: (r.quote_token_count, r.quote_end_idx - r.quote_start_idx),
+        reverse=True,
+    )
+    kept: List[_QuoteRecord] = []
+    spans: List[Tuple[int, int]] = []
+
+    for record in sorted_by_span:
+        start, end = record.quote_start_idx, record.quote_end_idx
+        overlap = any(not (end <= s or start >= e) for s, e in spans)
+        if overlap:
+            continue
+        if record.quote_token_count < _MIN_QUOTE_TOKEN_COUNT and len(records) > 1:
+            continue
+        spans.append((start, end))
+        kept.append(record)
+
+    kept.sort(key=lambda r: r.quote_start_idx)
+    return kept
+
+
 def quotation_elements(text: Optional[str]) -> List[Dict[str, Any]]:
-    """Extract quotations from a single text using lightweight heuristics.
+    """Extract quotations from a single text using NLP-lite heuristics."""
 
-    Returns a list of dicts with keys:
-      - speaker: str
-      - speaker_start_idx: int (char index, start)
-      - speaker_end_idx: int (char index, end/exclusive)
-      - quote: str (includes surrounding double quotes if present)
-      - quote_start_idx: int (char index, start at opening quote if present)
-      - quote_end_idx: int (char index, end/exclusive at closing quote if present)
-      - verb: str (quoting verb or phrase)
-      - verb_start_idx: int
-      - verb_end_idx: int
-      - quote_type: str (Heuristic | AccordingTo | VerbBefore | VerbAfter)
-
-    Notes
-    -----
-    - Uses simple tokenization and proximity heuristics (no spaCy dependency).
-    - Quote spans are detected as text between matching double quote characters ("").
-    - Verbs are selected from quote_verb.txt and matched case-insensitively.
-    - Speaker is approximated as the nearest proper-name-like token group near the verb.
-    """
     if not isinstance(text, str) or not text:
         return []
 
-    # Load quote verbs (cached in closure)
     def _load_quote_verbs_inner() -> set[str]:
         candidates: List[str] = []
         try:
@@ -218,246 +626,121 @@ def quotation_elements(text: Optional[str]) -> List[Dict[str, Any]]:
 
     verbs = _load_quote_verbs_inner()
 
-    # Tokenize with indices, keeping punctuation and quotes
-    # Regex splits into words (\w+), double quotes, or other single non-space chars
-    token_re = re.compile(r"\w+|\"|[^\w\s]")
-    tokens: List[Dict[str, Any]] = []
-    for m in token_re.finditer(text):
-        tok = m.group(0)
-        tokens.append({"text": tok, "start": m.start(), "end": m.end()})
+    tokens, sentences = _prepare_tokens_and_sentences(text)
+    quote_spans = _detect_quote_spans(text)
+    if not quote_spans:
+        return []
 
-    def join_span(start: int, end: int) -> str:
-        return text[start:end]
-
-    # Find quote spans delimited by double quotes
-    quote_spans: List[tuple[int, int]] = []  # (start_idx, end_idx) exclusive
-    open_idx: Optional[int] = None
-    for t in tokens:
-        if t["text"] == '"':
-            if open_idx is None:
-                open_idx = t["start"]
-            else:
-                # Close and record including the closing quote char
-                quote_spans.append((open_idx, t["end"]))
-                open_idx = None
-
-    # Helper: locate nearest verb occurrence around a region
-    # Returns (verb_text, start, end)
-    def find_nearest_verb(
-        span_start: int, span_end: int
-    ) -> tuple[str, int, int] | tuple[None, None, None]:
-        # Search windows in characters
-        LEFT_WIN = 200
-        RIGHT_WIN = 200
-        left_start = max(0, span_start - LEFT_WIN)
-        right_end = min(len(text), span_end + RIGHT_WIN)
-
-        # Collect candidate matches as (distance, start, end, text)
-        candidates: List[tuple[int, int, int, str]] = []
-
-        # Iterate by index for neighbor access
-        for i, t in enumerate(tokens):
-            ts, te, tt = t["start"], t["end"], t["text"]
-            if te <= left_start or ts >= right_end:
-                continue
-            lower = tt.lower()
-            # Check for phrase "according to"
-            if (
-                lower == "according"
-                and (i + 1) < len(tokens)
-                and tokens[i + 1]["text"].lower() == "to"
-            ):
-                vs, ve = ts, tokens[i + 1]["end"]
-                vtxt = "according to"
-                # Distance to quote span
-                if ve <= span_start:
-                    dist = span_start - ve
-                elif vs >= span_end:
-                    dist = vs - span_end
-                else:
-                    dist = 0
-                candidates.append((dist, vs, ve, vtxt))
-            # Single-token verb match
-            if lower in verbs:
-                vs, ve = ts, te
-                vtxt = tt
-                if ve <= span_start:
-                    dist = span_start - ve
-                elif vs >= span_end:
-                    dist = vs - span_end
-                else:
-                    dist = 0
-                candidates.append((dist, vs, ve, vtxt))
-
-        if not candidates:
-            return (None, None, None)
-
-        # Choose closest, tie-breaker: prefers before the quote
-        candidates.sort(key=lambda x: (x[0], x[1]))
-        _, vs, ve, vtxt = candidates[0]
-        return (vtxt, vs, ve)
-
-    TITLE_WORDS = {
-        "mr",
-        "mrs",
-        "ms",
-        "dr",
-        "prof",
-        "sir",
-        "madam",
-        "president",
-        "minister",
-        "senator",
-        "sen",
-        "rep",
-        "capt",
-        "gen",
-        "gov",
-        "amb",
-        "lord",
-        "lady",
-    }
-
-    def is_name_token(tok: str) -> bool:
-        if not tok:
-            return False
-        if tok[0].isupper() and any(c.isalpha() for c in tok):
-            return True
-        # All caps (ACRONYMS)
-        if len(tok) > 1 and tok.isupper() and tok.isalpha():
-            return True
-        # Title words (lowercase in our test but we'll lower for match)
-        if tok.lower().rstrip(".") in TITLE_WORDS:
-            return True
-        return False
-
-    # Find nearest contiguous name group near pivot index (verb)
-    def find_speaker_near(
-        pivot_start: int, pivot_end: int, direction: str
-    ) -> tuple[str, int, int] | tuple[None, None, None]:
-        # Scan tokens to left or right for a contiguous block of name-like tokens
-        MAX_HOPS = 50
-        if direction == "left":
-            # Walk leftwards to find the nearest block ending closest to pivot_start
-            i = (
-                next(
-                    (i for i in range(len(tokens)) if tokens[i]["end"] > pivot_start),
-                    len(tokens),
-                )
-                - 1
-            )
-            hops = 0
-            while i >= 0 and hops < MAX_HOPS:
-                tt = tokens[i]["text"]
-                if is_name_token(tt):
-                    # Expand to include contiguous name tokens to the left
-                    j = i
-                    while j - 1 >= 0 and is_name_token(tokens[j - 1]["text"]):
-                        j -= 1
-                    start = tokens[j]["start"]
-                    end = tokens[i]["end"]
-                    return (join_span(start, end), start, end)
-                elif tt in {",", ";", ":", "-", "—", "."}:
-                    # Hard boundary
-                    break
-                i -= 1
-                hops += 1
-        else:  # right
-            i = next(
-                (i for i in range(len(tokens)) if tokens[i]["start"] >= pivot_end),
-                len(tokens),
-            )
-            hops = 0
-            while i < len(tokens) and hops < MAX_HOPS:
-                tt = tokens[i]["text"]
-                if is_name_token(tt):
-                    # Expand to include contiguous name tokens to the right
-                    j = i
-                    while j + 1 < len(tokens) and is_name_token(tokens[j + 1]["text"]):
-                        j += 1
-                    start = tokens[i]["start"]
-                    end = tokens[j]["end"]
-                    return (join_span(start, end), start, end)
-                elif tt in {",", ";", ":", "-", "—", "."}:
-                    break
-                i += 1
-                hops += 1
-        return (None, None, None)
-
-    results: List[Dict[str, Any]] = []
+    records: List[_QuoteRecord] = []
 
     for qs, qe in quote_spans:
-        quote_text = join_span(qs, qe)
+        quote_text = text[qs:qe]
+        quote_token_count = _count_tokens_in_span(quote_text)
 
-        # Try to find nearest verb
-        vtxt, vs, ve = find_nearest_verb(qs, qe)
+        sentence_index = 0
+        for sent in sentences:
+            if sent.start <= qs < sent.end:
+                sentence_index = sent.index
+                break
+            if qs >= sent.end:
+                sentence_index = sent.index
 
-        speaker_text: str = ""
-        ss: Optional[int] = None
-        se: Optional[int] = None
-        quote_type = "Heuristic"
+        verb_info = _find_nearest_verb(tokens, verbs, qs, qe, sentence_index)
+        verb_text = ""
+        verb_start = -1
+        verb_end = -1
+        verb_token_index = -1
+        verb_token_end_index = -1
 
-        if vtxt is not None and vs is not None and ve is not None:
-            # Determine side relative to quote
-            if ve <= qs:
-                # verb before quote
-                # Prefer speaker immediately to left of verb
-                spk = find_speaker_near(vs, ve, direction="left")
-                if spk[0] is None:
-                    # Sometimes speaker after verb (e.g., said John)
-                    spk = find_speaker_near(vs, ve, direction="right")
-                speaker_text, ss, se = spk
-                quote_type = (
-                    "AccordingTo" if vtxt.lower() == "according to" else "VerbBefore"
-                )
-            elif vs >= qe:
-                # verb after quote (e.g., "...", said John)
-                spk = find_speaker_near(vs, ve, direction="right")
-                if spk[0] is None:
-                    spk = find_speaker_near(vs, ve, direction="left")
-                speaker_text, ss, se = spk
-                quote_type = (
-                    "AccordingTo" if vtxt.lower() == "according to" else "VerbAfter"
-                )
+        speaker_text = ""
+        speaker_start = -1
+        speaker_end = -1
+
+        if verb_info:
+            verb_text = verb_info["verb"]
+            verb_start = verb_info["verb_start"]
+            verb_end = verb_info["verb_end"]
+            verb_token_index = verb_info["token_index"]
+            verb_token_end_index = verb_info["token_end_index"]
+
+            if verb_end <= qs:
+                direction = "left"
+            elif verb_start >= qe:
+                direction = "right"
             else:
-                # Overlapping (unlikely), still record
-                quote_type = "Heuristic"
+                direction = "left"
 
-        # Fallback for According to pattern not caught by nearest search: scan local window
-        if (vtxt is None) or (vtxt.lower() != "according to"):
-            # scan explicitly around quotes
-            WINDOW = 150
-            left_ctx = text[max(0, qs - WINDOW) : qs]
-            # Simple search for phrase
-            m = re.search(r"according to\s+([^,\n]+)", left_ctx, flags=re.IGNORECASE)
-            if m:
-                vtxt = "according to"
-                vs = max(0, qs - WINDOW) + m.start()
-                # position of "to" end
-                verb_end_rel = m.start() + len("according to")
-                ve = max(0, qs - WINDOW) + verb_end_rel
-                # capture group is speaker until comma/newline
-                sp_rel_start, sp_rel_end = m.start(1), m.end(1)
-                ss = max(0, qs - WINDOW) + sp_rel_start
-                se = max(0, qs - WINDOW) + sp_rel_end
-                speaker_text = text[ss:se]
-                quote_type = "AccordingTo"
+            speaker_text, speaker_start, speaker_end = _find_speaker_near(
+                text,
+                tokens,
+                verb_token_index,
+                verb_token_end_index,
+                direction,
+            )
+            if not speaker_text:
+                fallback_direction = "right" if direction == "left" else "left"
+                speaker_text, speaker_start, speaker_end = _find_speaker_near(
+                    text,
+                    tokens,
+                    verb_token_index,
+                    verb_token_end_index,
+                    fallback_direction,
+                )
 
-        result = {
-            "speaker": speaker_text or "",
-            "speaker_start_idx": int(ss) if ss is not None else -1,
-            "speaker_end_idx": int(se) if se is not None else -1,
-            "quote": quote_text,
-            "quote_start_idx": int(qs),
-            "quote_end_idx": int(qe),
-            "verb": vtxt or "",
-            "verb_start_idx": int(vs) if vs is not None else -1,
-            "verb_end_idx": int(ve) if ve is not None else -1,
-            "quote_type": quote_type,
-        }
-        results.append(result)
+        if not verb_info:
+            window = 200
+            left_ctx_start = max(0, qs - window)
+            left_ctx = text[left_ctx_start:qs]
+            match = re.search(
+                r"according to\s+([^,\n]+)", left_ctx, flags=re.IGNORECASE
+            )
+            if match:
+                verb_text = "according to"
+                verb_start = left_ctx_start + match.start()
+                verb_end = left_ctx_start + match.start() + len("according to")
+                speaker_start = left_ctx_start + match.start(1)
+                speaker_end = left_ctx_start + match.end(1)
+                speaker_text = text[speaker_start:speaker_end]
 
-    return results
+        speaker_text = (speaker_text or "").strip()
+        if speaker_text and speaker_text.lower() in _INVALID_SPEAKER_WORDS:
+            speaker_text = ""
+            speaker_start = -1
+            speaker_end = -1
+
+        if verb_text and verb_text.lower() == "according to":
+            quote_type = "AccordingTo"
+        else:
+            quote_type = _compute_quote_type(
+                qs,
+                qe,
+                verb_start,
+                verb_end,
+                speaker_start,
+                speaker_end,
+            )
+
+        record = _QuoteRecord(
+            speaker=speaker_text,
+            speaker_start_idx=speaker_start,
+            speaker_end_idx=speaker_end,
+            quote=quote_text,
+            quote_start_idx=qs,
+            quote_end_idx=qe,
+            verb=verb_text,
+            verb_start_idx=verb_start,
+            verb_end_idx=verb_end,
+            quote_type=quote_type,
+            quote_token_count=quote_token_count,
+            is_floating_quote=False,
+            sentence_index=sentence_index,
+        )
+        records.append(record)
+
+    records = _inherit_floating_quotes(records, sentences)
+    records = _deduplicate_quotes(records)
+
+    return [record.to_public_dict() for record in records]
 
 
 def concordance_elements(
