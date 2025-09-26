@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Union
 import nltk
 import numpy as np
 import polars as pl
-from nltk.tokenize import word_tokenize
+from nltk.tokenize import TreebankWordDetokenizer, word_tokenize
 from sklearn.preprocessing import MinMaxScaler
 
 # Suppress sklearn deprecation warnings
@@ -37,6 +37,7 @@ except Exception:  # pragma: no cover - environment without umap
 UMAP = None  # type: ignore
 
 _NLTK_PUNKT_READY = False
+_DETOKENIZER = TreebankWordDetokenizer()
 
 
 def _ensure_nltk_punkt() -> None:
@@ -512,10 +513,19 @@ def concordance_elements(
         l1 = left_context_tokens[-1] if left_context_tokens else ""
         r1 = right_context_tokens[0] if right_context_tokens else ""
 
+        left_context = (
+            _DETOKENIZER.detokenize(left_context_tokens) if left_context_tokens else ""
+        )
+        right_context = (
+            _DETOKENIZER.detokenize(right_context_tokens)
+            if right_context_tokens
+            else ""
+        )
+
         results.append({
-            "left_context": " ".join(left_context_tokens),
+            "left_context": left_context,
             "matched_text": matched_text,
-            "right_context": " ".join(right_context_tokens),
+            "right_context": right_context,
             "start_idx": int(start_idx),
             "end_idx": int(end_idx),
             "l1": l1,
