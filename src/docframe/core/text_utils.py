@@ -9,8 +9,10 @@ import warnings
 from functools import reduce
 from typing import Any, Dict, List, Optional, Union
 
+import nltk
 import numpy as np
 import polars as pl
+from nltk.tokenize import word_tokenize
 from sklearn.preprocessing import MinMaxScaler
 
 # Suppress sklearn deprecation warnings
@@ -34,24 +36,40 @@ except Exception:  # pragma: no cover - environment without umap
     _HAS_UMAP = False
 UMAP = None  # type: ignore
 
+_NLTK_PUNKT_READY = False
 
-def simple_tokenize(
-    text: str, lowercase: bool = True, remove_punct: bool = True
-) -> List[str]:
-    """Simple tokenization using regex"""
+
+def _ensure_nltk_punkt() -> None:
+    global _NLTK_PUNKT_READY
+    if _NLTK_PUNKT_READY:
+        return
+    try:
+        nltk.data.find("tokenizers/punkt")
+        _NLTK_PUNKT_READY = True
+    except LookupError:
+        nltk.download("punkt", quiet=True)
+        try:
+            nltk.download("punkt_tab", quiet=True)
+        except Exception:
+            # punkt_tab is optional; ignore download failures to remain offline-friendly
+            pass
+        _NLTK_PUNKT_READY = True
+
+
+def tokenize(text: str, lowercase: bool = True, remove_punct: bool = True) -> List[str]:
+    """Tokenize text using NLTK's word_tokenize with optional normalization."""
     if not isinstance(text, str):
         raise TypeError("Input must be a string")
 
-    # Convert to lowercase if requested
-    if lowercase:
-        text = text.lower()
+    processed_text = text.lower() if lowercase else text
 
-    # Remove punctuation if requested
+    _ensure_nltk_punkt()
+
+    tokens = word_tokenize(processed_text)
+
     if remove_punct:
-        text = text.translate(str.maketrans("", "", string.punctuation))
+        tokens = [tok for tok in tokens if any(ch.isalnum() for ch in tok)]
 
-    # Split on whitespace
-    tokens = text.split()
     return tokens
 
 
@@ -111,7 +129,7 @@ def extract_ngrams(text: str, n: int = 2) -> List[str]:
     if not isinstance(text, str):
         return []
 
-    tokens = simple_tokenize(text)
+    tokens = tokenize(text)
     if len(tokens) < n:
         return []
 
@@ -481,8 +499,8 @@ def concordance_elements(
         right_text = text[end_idx:]
 
         # Tokenize left/right contexts without altering case or punctuation
-        left_tokens = simple_tokenize(left_text, lowercase=False, remove_punct=False)
-        right_tokens = simple_tokenize(right_text, lowercase=False, remove_punct=False)
+        left_tokens = tokenize(left_text, lowercase=False, remove_punct=False)
+        right_tokens = tokenize(right_text, lowercase=False, remove_punct=False)
 
         left_context_tokens = (
             left_tokens[-num_left_tokens:] if num_left_tokens > 0 else []
@@ -869,7 +887,7 @@ def compute_token_frequencies(
             # Fallback if text namespace is not available
             for text in doc_series.to_list():
                 if text and isinstance(text, str):
-                    tokens = simple_tokenize(text)
+                    tokens = tokenize(text)
                     if tokens:
                         filtered_tokens = [
                             token for token in tokens if token not in stop_words_set

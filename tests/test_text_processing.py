@@ -14,7 +14,7 @@ from docframe.core.text_utils import (
     extract_ngrams,
     remove_stopwords,
     sentence_count,
-    simple_tokenize,
+    tokenize,
     word_count,
 )
 
@@ -22,31 +22,27 @@ from docframe.core.text_utils import (
 class TestTextUtils:
     """Test text utility functions"""
 
-    def test_simple_tokenize(self):
-        """Test simple tokenization function"""
+    def test_tokenize(self):
+        """Test tokenization function"""
         # Basic tokenization
-        tokens = simple_tokenize("Hello world!")
+        tokens = tokenize("Hello world!")
         assert tokens == ["hello", "world"]
 
         # With punctuation preserved
-        tokens = simple_tokenize("Hello, world!", remove_punct=False)
-        assert tokens == ["hello,", "world!"]
+        tokens = tokenize("Hello, world!", remove_punct=False)
+        assert tokens == ["hello", ",", "world", "!"]
 
         # Without lowercase
-        tokens = simple_tokenize("Hello World", lowercase=False)
+        tokens = tokenize("Hello World", lowercase=False)
         assert tokens == ["Hello", "World"]
 
         # Empty string
-        tokens = simple_tokenize("")
+        tokens = tokenize("")
         assert tokens == []
 
         # Non-string input (handle type issues in implementation)
-        try:
-            tokens = simple_tokenize(None)  # type: ignore
-            assert tokens == []
-        except (TypeError, AttributeError):
-            # Expected for non-string input
-            pass
+        with pytest.raises(TypeError):
+            tokenize(None)  # type: ignore[arg-type]
 
     def test_clean_text(self):
         """Test text cleaning function"""
@@ -135,7 +131,7 @@ class TestBasicTextNamespace:
     def test_namespace_registration(self):
         """Test that the text namespace is registered"""
         # Simple test to see if namespace is available
-        df = pl.DataFrame({"text": ["hello world", "test case"]})
+        _ = pl.DataFrame({"text": ["hello world", "test case"]})
 
         # Just check if the attribute exists
         try:

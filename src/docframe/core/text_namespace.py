@@ -15,7 +15,7 @@ from .text_utils import (
     quotation_elements,
     remove_stopwords,
     sentence_count,
-    simple_tokenize,
+    tokenize,
     word_count,
 )
 
@@ -32,9 +32,7 @@ class TextExprNamespace:
     ) -> pl.Expr:
         """Tokenize text into list of tokens"""
 
-        _tokenize = partial(
-            simple_tokenize, lowercase=lowercase, remove_punct=remove_punct
-        )
+        _tokenize = partial(tokenize, lowercase=lowercase, remove_punct=remove_punct)
 
         results = self._expr.map_elements(_tokenize, return_dtype=pl.List(pl.String))
         if explode:
@@ -222,10 +220,11 @@ class TextSeriesNamespace:
             .to_series()
         )
         # _tokenize = partial(
-        #     simple_tokenize, lowercase=lowercase, remove_punct=remove_punct
-        # )
 
-        # return self._series.map_elements(_tokenize, return_dtype=pl.List(pl.String))
+    #     tokenize, lowercase=lowercase, remove_punct=remove_punct
+    # )
+
+    # return self._series.map_elements(_tokenize, return_dtype=pl.List(pl.String))
 
     def clean(
         self,

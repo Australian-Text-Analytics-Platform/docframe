@@ -502,13 +502,13 @@ The `text_utils` module provides standalone text processing functions:
 
 ```python
 from atapcorpus.core.text_utils import (
-    simple_tokenize, clean_text, word_count, 
+    tokenize, clean_text, word_count, 
     char_count, sentence_count, extract_ngrams,
     contains_pattern, remove_stopwords
 )
 
 # Tokenize text
-tokens = simple_tokenize("Hello world!", lowercase=True, remove_punct=True)
+tokens = tokenize("Hello world!", lowercase=True, remove_punct=True)
 
 # Clean text
 clean = clean_text("Hello World!", lowercase=True, remove_punct=True)
