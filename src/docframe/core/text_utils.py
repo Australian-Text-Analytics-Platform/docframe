@@ -102,7 +102,40 @@ def _get_sentence_tokenizer():
 
 
 def tokenize(text: str, lowercase: bool = True, remove_punct: bool = True) -> List[str]:
-    """Tokenize text using NLTK's word_tokenize with optional normalization."""
+    """
+    Tokenize text using NLTK's word_tokenize with optional normalization.
+
+    Wraps NLTK's word_tokenize function with preprocessing options. Automatically downloads
+    required NLTK data (punkt tokenizer) if not already available.
+
+    Args:
+        text: Input text string to tokenize. Must be a string type.
+        lowercase: If True, convert text to lowercase before tokenization. Defaults to True.
+        remove_punct: If True, filter out tokens containing only punctuation.
+            Keeps tokens with at least one alphanumeric character. Defaults to True.
+
+    Returns:
+        List[str]: List of tokens. Empty list if input is empty or contains no tokens.
+
+    Raises:
+        TypeError: If input text is not a string.
+
+    Examples:
+        >>> tokenize("Hello, World!")
+        ['hello', ',', 'world', '!']  # with remove_punct=False
+
+        >>> tokenize("Hello, World!", remove_punct=True)
+        ['hello', 'world']
+
+        >>> tokenize("It's a test.", lowercase=False, remove_punct=True)
+        ["It's", 'a', 'test']
+
+    Notes:
+        - Uses NLTK's TreebankWordTokenizer internally
+        - Automatically downloads 'punkt' and 'punkt_tab' if needed
+        - Punctuation removal checks for any alphanumeric character (isalnum)
+        - Empty strings or None values raise TypeError
+    """
     if not isinstance(text, str):
         raise TypeError("Input must be a string")
 
@@ -125,7 +158,40 @@ def clean_text(
     remove_digits: bool = False,
     remove_extra_whitespace: bool = True,
 ) -> str:
-    """Clean text with various options"""
+    """
+    Clean text with various normalization options.
+
+    Applies multiple text cleaning operations in sequence for preprocessing pipelines.
+    Returns empty string for non-string inputs instead of raising errors.
+
+    Args:
+        text: Input text string to clean. Non-string inputs return empty string.
+        lowercase: If True, convert text to lowercase. Defaults to True.
+        remove_punct: If True, remove all punctuation characters. Defaults to True.
+        remove_digits: If True, remove all digit characters. Defaults to False.
+        remove_extra_whitespace: If True, collapse multiple whitespace characters
+            into single spaces and strip leading/trailing whitespace. Defaults to True.
+
+    Returns:
+        str: Cleaned text string. Empty string if input is not a string.
+
+    Examples:
+        >>> clean_text("  Hello,  World!  123  ")
+        'hello world 123'  # lowercase, punct removed, whitespace normalized
+
+        >>> clean_text("Price: $50.99", remove_digits=True)
+        'price '  # digits removed
+
+        >>> clean_text("Test!", lowercase=False, remove_punct=False)
+        'Test!'  # no modifications
+
+    Notes:
+        - Operations applied in order: lowercase → remove_punct → remove_digits → whitespace
+        - Uses str.translate for punctuation removal (string.punctuation)
+        - Uses regex r"\\d+" for digit removal
+        - Uses regex r"\\s+" for whitespace normalization
+        - Gracefully handles non-string inputs by returning empty string
+    """
     if not isinstance(text, str):
         return ""
 
@@ -147,21 +213,88 @@ def clean_text(
 
 
 def word_count(text: str) -> int:
-    """Count words in text"""
+    """
+    Count words in text using whitespace splitting.
+
+    Simple word count using str.split() without arguments (splits on any whitespace).
+    Returns 0 for non-string or empty inputs.
+
+    Args:
+        text: Input text string. Non-string inputs return 0.
+
+    Returns:
+        int: Number of whitespace-separated tokens. 0 for empty or non-string inputs.
+
+    Examples:
+        >>> word_count("Hello world")
+        2
+        >>> word_count("  Multiple   spaces  ")
+        2
+        >>> word_count("")
+        0
+
+    Notes:
+        - Does not handle punctuation or special tokenization
+        - Consecutive whitespace treated as single separator
+        - For more accurate word counting, use tokenize() instead
+    """
     if not isinstance(text, str):
         return 0
     return len(text.split())
 
 
 def char_count(text: str) -> int:
-    """Count characters in text"""
+    """
+    Count total characters in text including spaces and punctuation.
+
+    Uses len() to count all characters. Returns 0 for non-string inputs.
+
+    Args:
+        text: Input text string. Non-string inputs return 0.
+
+    Returns:
+        int: Total character count including whitespace and punctuation. 0 for non-string.
+
+    Examples:
+        >>> char_count("Hello")
+        5
+        >>> char_count("Hi there!")
+        9  # includes space and punctuation
+        >>> char_count("")
+        0
+    """
     if not isinstance(text, str):
         return 0
     return len(text)
 
 
 def sentence_count(text: str) -> int:
-    """Count sentences in text (simple approach)"""
+    """
+    Count sentences in text using simple regex splitting.
+
+    Splits text on common sentence-ending punctuation [.!?]+ and counts non-empty segments.
+    Returns 0 for non-string inputs.
+
+    Args:
+        text: Input text string. Non-string inputs return 0.
+
+    Returns:
+        int: Number of detected sentences. Empty or whitespace-only segments ignored.
+
+    Examples:
+        >>> sentence_count("Hello! How are you?")
+        2
+        >>> sentence_count("One sentence.")
+        1
+        >>> sentence_count("Multiple!!! Exclamation!!! Marks!!!")
+        3
+
+    Notes:
+        - Uses regex r"[.!?]+" for splitting (handles multiple punctuation marks)
+        - Does not handle abbreviations (e.g., "Dr.", "U.S.") correctly
+        - Does not handle quotation marks or complex punctuation
+        - For more accurate sentence segmentation, consider NLTK's sentence tokenizer
+    """
     if not isinstance(text, str):
         return 0
     # Simple sentence splitting on common sentence endings
@@ -170,7 +303,35 @@ def sentence_count(text: str) -> int:
 
 
 def extract_ngrams(text: str, n: int = 2) -> List[str]:
-    """Extract n-grams from text"""
+    """
+    Extract n-grams from text as space-separated token sequences.
+
+    Tokenizes text and creates sliding windows of n consecutive tokens.
+    Returns empty list for non-string inputs or if text has fewer than n tokens.
+
+    Args:
+        text: Input text string to extract n-grams from. Non-string inputs return [].
+        n: Size of n-grams (number of consecutive tokens). Defaults to 2 (bigrams).
+
+    Returns:
+        List[str]: List of n-grams as space-separated strings. Empty if insufficient tokens.
+
+    Examples:
+        >>> extract_ngrams("the quick brown fox", n=2)
+        ['the quick', 'quick brown', 'brown fox']
+
+        >>> extract_ngrams("the quick brown fox", n=3)
+        ['the quick brown', 'quick brown fox']
+
+        >>> extract_ngrams("short", n=2)
+        []  # only 1 token, need at least 2
+
+    Notes:
+        - Uses tokenize() internally (lowercase=True, remove_punct=True by default)
+        - N-grams are space-separated strings, not tuples
+        - Sliding window approach: [0:n], [1:n+1], ..., [len-n:len]
+        - Returns empty list if len(tokens) < n
+    """
     if not isinstance(text, str):
         return []
 

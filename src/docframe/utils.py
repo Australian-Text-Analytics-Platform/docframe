@@ -4,8 +4,10 @@ Similar to GeoPandas utilities for working with geographic data
 """
 
 import warnings
+import zipfile
 from functools import wraps
-from typing import TYPE_CHECKING, Callable, List
+from pathlib import Path
+from typing import TYPE_CHECKING, Callable, Iterable, List
 
 import polars as pl
 from polars import from_arrow as _from_arrow
@@ -23,6 +25,26 @@ from .core.docframe import DocDataFrame
 
 if TYPE_CHECKING:
     pass
+
+
+_DEFAULT_TEXT_FILE_EXTENSIONS = {
+    ".txt",
+    ".text",
+    ".md",
+    ".rst",
+    ".log",
+    ".cfg",
+    ".ini",
+    ".yml",
+    ".yaml",
+    ".json",
+    ".csv",
+    ".tsv",
+    ".html",
+    ".htm",
+    ".tex",
+    ".srt",
+}
 
 
 def docio(func: Callable) -> Callable:
@@ -115,6 +137,106 @@ from_pandas = docio(_from_pandas)
 from_arrow = docio(_from_arrow)
 from_numpy = docio(_from_numpy)
 
+
+def _read_zip(
+    path: str | Path,
+    *,
+    encoding: str = "utf-8",
+    errors: str = "ignore",
+    text_extensions: Iterable[str] | None = None,
+    include_extensionless: bool = True,
+) -> pl.DataFrame:
+    """Read text files from a ZIP archive into a DataFrame.
+
+    Parameters
+    ----------
+    path : str or Path
+        Path to the ZIP archive.
+    encoding : str, default "utf-8"
+        Text encoding used when decoding file contents.
+    errors : str, default "ignore"
+        Error handling strategy passed to :py:meth:`bytes.decode`.
+    text_extensions : Iterable[str], optional
+        Custom iterable of file extensions that should be treated as text.
+        Extensions can be specified with or without a leading dot and are
+        matched case-insensitively.
+    include_extensionless : bool, default True
+        Whether files without an extension should be treated as text.
+
+    Returns
+    -------
+    polars.DataFrame
+        DataFrame with columns ``file_path``, ``base_name``, ``extension`` and ``text``.
+    """
+
+    archive_path = Path(path)
+    if not archive_path.exists():
+        raise FileNotFoundError(f"ZIP archive not found: {archive_path}")
+
+    if text_extensions is None:
+        allowed_extensions = _DEFAULT_TEXT_FILE_EXTENSIONS
+    else:
+        allowed_extensions = {
+            (ext if ext.startswith(".") else f".{ext}").lower()
+            for ext in text_extensions
+        }
+
+    records: list[dict[str, str]] = []
+
+    with zipfile.ZipFile(archive_path) as archive:
+        for info in archive.infolist():
+            if info.is_dir():
+                continue
+
+            file_path = info.filename
+            path_obj = Path(file_path)
+            file_name = path_obj.name
+            base_name = path_obj.stem
+            extension = path_obj.suffix
+
+            # Skip macOS resource forks and hidden system entries
+            if file_path.startswith("__MACOSX/") or file_name.startswith("._"):
+                continue
+
+            suffix = extension.lower()
+            if suffix:
+                if suffix not in allowed_extensions:
+                    continue
+            elif not include_extensionless:
+                continue
+
+            with archive.open(info, "r") as file_obj:
+                data = file_obj.read()
+
+            try:
+                text_content = data.decode(encoding, errors=errors)
+            except UnicodeDecodeError:
+                warnings.warn(
+                    f"Skipping '{file_path}' - unable to decode with encoding {encoding!r}",
+                    UserWarning,
+                )
+                continue
+
+            records.append({
+                "file_path": file_path,
+                "base_name": base_name,
+                "extension": extension,
+                "text": text_content,
+            })
+
+    records.sort(key=lambda entry: entry["file_path"])
+
+    return pl.DataFrame(
+        records,
+        schema={
+            "file_path": pl.String,
+            "base_name": pl.String,
+            "extension": pl.String,
+            "text": pl.String,
+        },
+    )
+
+
 # Conditionally import and wrap functions that may not exist in all polars versions
 try:
     from polars import read_excel as _read_excel
@@ -153,6 +275,28 @@ except ImportError:
 
 
 # Import and wrap polars I/O functions using the decorator
+_read_zip_wrapped = docio(_read_zip)
+
+
+def read_zip(
+    path: str | Path,
+    *,
+    encoding: str = "utf-8",
+    errors: str = "ignore",
+    text_extensions: Iterable[str] | None = None,
+    include_extensionless: bool = True,
+    document_column: str | None = "text",
+):
+    """Read textual members from a ZIP archive into a DocDataFrame."""
+
+    return _read_zip_wrapped(
+        path,
+        encoding=encoding,
+        errors=errors,
+        text_extensions=text_extensions,
+        include_extensionless=include_extensionless,
+        document_column=document_column,
+    )
 
 
 def concat_documents(

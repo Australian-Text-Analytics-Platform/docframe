@@ -17,10 +17,27 @@ def guess_document_column(
     sampler: Callable[[int], pl.DataFrame],
     sample_size: int = 1000,
 ) -> Optional[str]:
-    """Guess the document column.
+    """
+    Guess the document column by finding the string column with the longest average length.
 
-    Heuristic: choose the string column (Utf8/String) with the largest average
-    character length over a sample of rows. Returns None if no string columns.
+    Uses a heuristic approach: identifies the string column with the largest average
+    text length over a sample of rows. This typically represents the main document/content
+    column in text datasets.
+
+    Args:
+        schema: Polars schema containing column names and types.
+        sampler: Callable that returns a DataFrame sample of specified size.
+        sample_size: Number of rows to sample for length calculation. Defaults to 1000.
+
+    Returns:
+        str | None: Name of the guessed document column based on longest average length,
+            or None if no string columns exist.
+
+    Notes:
+        - Only considers columns with Utf8/String dtype
+        - Returns immediately if only one string column exists
+        - Computes average using pl.col(col).str.len_chars().mean()
+        - Returns None if DataFrame has no string columns
     """
     items = schema.items() if hasattr(schema, "items") else list(schema)  # type: ignore[arg-type]
     string_columns = [col for col, dtype in items if dtype in (pl.Utf8, pl.String)]
@@ -452,16 +469,75 @@ class DocDataFrame(_DocumentColumnMixin):
         return DocDataFrame(result_df, document_column=self._document_column_name)
 
     def add_word_count(self, column_name: str = "word_count") -> "DocDataFrame":
+        """
+        Add a word count column for the active document column.
+
+        Computes word count using simple whitespace splitting (equivalent to len(text.split())).
+        Returns a new DocDataFrame with the added column.
+
+        Args:
+            column_name: Name for the new word count column. Defaults to "word_count".
+
+        Returns:
+            DocDataFrame: New instance with added word count column.
+
+        Examples:
+            >>> doc_df = DocDataFrame({'content': ['Hello world', 'Text analysis']})
+            >>> doc_df.add_word_count()
+            # Adds 'word_count' column with values [2, 2]
+
+        Notes:
+            - Uses the text.word_count() namespace method
+            - Counts words by splitting on whitespace
+            - Does not handle punctuation or special tokenization
+        """
         word_counts = self.document.text.word_count()  # type: ignore[attr-defined]
         result_df = self._df.with_columns(word_counts.alias(column_name))
         return DocDataFrame(result_df, document_column=self._document_column_name)
 
     def add_char_count(self, column_name: str = "char_count") -> "DocDataFrame":
+        """
+        Add a character count column for the active document column.
+
+        Counts total characters including spaces and punctuation using len(text).
+
+        Args:
+            column_name: Name for the new character count column. Defaults to "char_count".
+
+        Returns:
+            DocDataFrame: New instance with added character count column.
+
+        Examples:
+            >>> doc_df = DocDataFrame({'content': ['Hi', 'Hello!']})
+            >>> doc_df.add_char_count()
+            # Adds 'char_count' column with values [2, 6]
+        """
         char_counts = self.document.text.char_count()  # type: ignore[attr-defined]
         result_df = self._df.with_columns(char_counts.alias(column_name))
         return DocDataFrame(result_df, document_column=self._document_column_name)
 
     def add_sentence_count(self, column_name: str = "sentence_count") -> "DocDataFrame":
+        """
+        Add a sentence count column for the active document column.
+
+        Counts sentences using simple regex splitting on [.!?]+ patterns.
+
+        Args:
+            column_name: Name for the new sentence count column. Defaults to "sentence_count".
+
+        Returns:
+            DocDataFrame: New instance with added sentence count column.
+
+        Examples:
+            >>> doc_df = DocDataFrame({'content': ['Hello! How are you?', 'One sentence.']})
+            >>> doc_df.add_sentence_count()
+            # Adds 'sentence_count' column with values [2, 1]
+
+        Notes:
+            - Uses simple regex [.!?]+ for sentence detection
+            - May not handle complex punctuation or abbreviations correctly
+            - For more accurate sentence segmentation, consider NLTK's sentence tokenizer
+        """
         sentence_counts = self.document.text.sentence_count()  # type: ignore[attr-defined]
         result_df = self._df.with_columns(sentence_counts.alias(column_name))
         return DocDataFrame(result_df, document_column=self._document_column_name)

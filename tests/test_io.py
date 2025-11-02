@@ -19,17 +19,15 @@ class TestIOOperations:
     @pytest.fixture
     def sample_data(self):
         """Create sample data for testing"""
-        return pl.DataFrame(
-            {
-                "article": [
-                    "The quick brown fox jumps over the lazy dog",
-                    "Pack my box with five dozen liquor jugs",
-                    "How vexingly quick daft zebras jump",
-                ],
-                "author": ["Alice", "Bob", "Charlie"],
-                "year": [2020, 2021, 2022],
-            }
-        )
+        return pl.DataFrame({
+            "article": [
+                "The quick brown fox jumps over the lazy dog",
+                "Pack my box with five dozen liquor jugs",
+                "How vexingly quick daft zebras jump",
+            ],
+            "author": ["Alice", "Bob", "Charlie"],
+            "year": [2020, 2021, 2022],
+        })
 
     @pytest.fixture
     def temp_csv(self, sample_data):
@@ -143,3 +141,35 @@ class TestIOOperations:
         df = lazy_df.collect()
         assert len(df) == 3
         assert "article" in df.columns
+
+    def test_read_zip(self):
+        """Read text files from a ZIP archive into a DocDataFrame."""
+
+        zip_path = (
+            Path(__file__).resolve().parent.parent
+            / "examples"
+            / "data"
+            / "zip_example"
+            / "data.zip"
+        )
+
+        doc_df = docframe.read_zip(zip_path)
+
+        assert isinstance(doc_df, DocDataFrame)
+        assert doc_df.active_document_name == "text"
+
+        df = doc_df.dataframe
+        # Archive contains three text files: 1.txt, 2.md, 3 (no extension)
+        assert df.shape == (3, 4)
+        assert set(df.columns) == {"file_path", "base_name", "extension", "text"}
+
+        assert sorted(df["base_name"].to_list()) == ["1", "2", "3"]
+        assert sorted(df["extension"].to_list()) == ["", ".md", ".txt"]
+        sample_row = (
+            df.filter(pl.col("base_name") == "1").select("text").to_series().item()
+        )
+        assert "Eldoria" in sample_row
+
+        raw_df = docframe.read_zip(zip_path, document_column=False)
+        assert isinstance(raw_df, pl.DataFrame)
+        assert "text" in raw_df.columns
