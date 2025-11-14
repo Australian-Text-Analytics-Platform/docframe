@@ -109,10 +109,7 @@ class TestIOOperations:
 
     def test_from_pandas_conversion(self, sample_data):
         """Test conversion from pandas DataFrame"""
-        try:
-            import pandas as pd
-        except ImportError:
-            pytest.skip("pandas not available")
+        pd = pytest.importorskip("pandas")
 
         # Create pandas DataFrame
         pdf = pd.DataFrame(sample_data)
