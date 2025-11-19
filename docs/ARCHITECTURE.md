@@ -223,6 +223,54 @@ tokens = df['text'].text.tokenize()
 df = df.text.add_word_count('text').text.clean('text')
 ```
 
+#### Sequential Analysis (DataFrame + LazyFrame)
+
+- **Purpose**: Bucket chronological or numeric values into evenly spaced periods, optionally grouped by categorical columns, and emit period boundaries plus counts.
+- **Implemented In**: `TextDataFrameNamespace.sequential_analysis()` and `TextLazyFrameNamespace.sequential_analysis()`.
+- **Key Inputs**:
+  1. `time_column`: datetime/date or numeric column to bucket.
+  1. `frequency`: `'hourly' | 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly'` (datetime mode only).
+  1. `column_type`: `'datetime'` (default) or `'numeric'`.
+  1. `numeric_origin` + `numeric_interval`: optional anchor/required bin width for numeric mode.
+  1. `group_by_columns`: optional categorical splits appended after the time/numeric bin.
+- **Execution Flow**:
+  1. Normalize `column_type` and validate frequencies (datetime) or positive `numeric_interval` (numeric).
+  1. Build `time_period`: Datetime columns use `.dt.truncate()` at the requested granularity (hourly, weekly, monthly, quarterly, yearly) while numeric columns cast to `Float64`, compute `(value - origin) / interval`, floor to `Int64`, and then project back to the left edge of the bin.
+  1. `group_by(['time_period', *group_by_columns])` and aggregate `sequential_count`, `period_start`, `period_end`.
+  1. Create `time_period_formatted`: Datetime mode uses `dt.strftime(time_format)` except for quarterly, which relies on `pl.format("{}-Q{}", year_expr, quarter_expr)`; numeric mode renders `[start, end)` using `pl.format("[{:.6g}, {:.6g})", start_expr, end_expr)` so integers drop trailing decimals while fractional bins stay precise.
+  1. Sort chronologically (and by grouping columns) when `sort_by_time=True`.
+
+##### Example – Hourly Buckets per Topic
+
+```python
+hourly = (
+  df.text.sequential_analysis(
+    time_column="created_at",
+    group_by_columns=["topic"],
+    frequency="hourly",
+  )
+)
+```
+
+##### Example – Numeric Sentiment Bins
+
+```python
+sentiment_bins = (
+  df.text.sequential_analysis(
+    time_column="sentiment_score",
+    column_type="numeric",
+    numeric_origin=-1.0,
+    numeric_interval=0.25,
+  )
+)
+```
+
+##### Q & A
+
+**Q:** What if `numeric_interval` is omitted when `column_type="numeric"`?
+
+**A:** The namespace raises `ValueError("numeric_interval must be a positive number...")` because the bin width is required to render `[start, end)` labels.
+
 ### 3. Text Utilities (`core/text_utils.py`)
 
 #### Core Processing Functions

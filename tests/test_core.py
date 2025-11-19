@@ -316,8 +316,8 @@ class TestDocDataFrame:
             "r1_freq",
         ]
 
-    def test_frequency_analysis_basic(self):
-        """Test basic frequency analysis functionality"""
+    def test_sequential_analysis_basic(self):
+        """Test basic sequential analysis functionality"""
         # Create test data with dates
         dates = [
             "2023-01-15",
@@ -337,20 +337,20 @@ class TestDocDataFrame:
             pl.col("created_at").str.to_datetime("%Y-%m-%d")
         )
 
-        # Test monthly frequency using text namespace
-        monthly_freq = df.text.frequency_analysis("created_at", frequency="monthly")
-        assert "frequency_count" in monthly_freq.columns
-        assert "time_period" in monthly_freq.columns
-        assert "time_period_formatted" in monthly_freq.columns
-        assert len(monthly_freq) == 3  # Jan, Feb, Mar
+        # Test monthly sequences using text namespace
+        monthly_seq = df.text.sequential_analysis("created_at", frequency="monthly")
+        assert "sequential_count" in monthly_seq.columns
+        assert "time_period" in monthly_seq.columns
+        assert "time_period_formatted" in monthly_seq.columns
+        assert len(monthly_seq) == 3  # Jan, Feb, Mar
 
-        # Check frequency counts
-        monthly_data = monthly_freq.sort("time_period")
-        counts = monthly_data.get_column("frequency_count").to_list()
+        # Check counts
+        monthly_data = monthly_seq.sort("time_period")
+        counts = monthly_data.get_column("sequential_count").to_list()
         assert counts == [2, 2, 2]  # 2 docs each month
 
-    def test_frequency_analysis_with_grouping(self):
-        """Test frequency analysis with grouping columns"""
+    def test_sequential_analysis_with_grouping(self):
+        """Test sequential analysis with grouping columns"""
         dates = [
             "2023-01-15",
             "2023-01-20",
@@ -370,18 +370,18 @@ class TestDocDataFrame:
         )
 
         # Test with grouping by category using text namespace
-        grouped_freq = df.text.frequency_analysis(
+        grouped_seq = df.text.sequential_analysis(
             "created_at", group_by_columns=["category"], frequency="monthly"
         )
 
-        assert len(grouped_freq) == 6  # 3 months × 2 categories
+        assert len(grouped_seq) == 6  # 3 months × 2 categories
 
         # Check that we have both categories for each month
-        grouped_data = grouped_freq.sort(["time_period", "category"])
+        grouped_data = grouped_seq.sort(["time_period", "category"])
         categories = grouped_data.get_column("category").to_list()
         assert categories == ["A", "B", "A", "B", "A", "B"]
 
-    def test_frequency_analysis_different_frequencies(self):
+    def test_sequential_analysis_different_frequencies(self):
         """Test different frequency options"""
         # Create data spanning multiple days, weeks, months
         dates = [
@@ -399,24 +399,59 @@ class TestDocDataFrame:
             pl.col("created_at").str.to_datetime("%Y-%m-%d")
         )
 
-        # Test daily frequency using text namespace
-        daily_freq = df.text.frequency_analysis("created_at", frequency="daily")
-        assert len(daily_freq) == 7  # 7 unique days
+        # Test daily sequences using text namespace
+        daily_seq = df.text.sequential_analysis("created_at", frequency="daily")
+        assert len(daily_seq) == 7  # 7 unique days
 
-        # Test weekly frequency
-        weekly_freq = df.text.frequency_analysis("created_at", frequency="weekly")
-        assert len(weekly_freq) <= 7  # Should be fewer weeks than days
+        # Test weekly sequences
+        weekly_seq = df.text.sequential_analysis("created_at", frequency="weekly")
+        assert len(weekly_seq) <= 7  # Should be fewer weeks than days
 
-        # Test monthly frequency
-        monthly_freq = df.text.frequency_analysis("created_at", frequency="monthly")
-        assert len(monthly_freq) == 3  # Jan, Feb, Mar
+        # Test monthly sequences
+        monthly_seq = df.text.sequential_analysis("created_at", frequency="monthly")
+        assert len(monthly_seq) == 3  # Jan, Feb, Mar
 
-        # Test yearly frequency
-        yearly_freq = df.text.frequency_analysis("created_at", frequency="yearly")
-        assert len(yearly_freq) == 1  # Only 2023
+        # Test yearly sequences
+        yearly_seq = df.text.sequential_analysis("created_at", frequency="yearly")
+        assert len(yearly_seq) == 1  # Only 2023
 
-    def test_frequency_analysis_sorting(self):
-        """Test sorting options in frequency analysis"""
+        # Test hourly sequences on timestamped data
+        hourly_df = pl.DataFrame({
+            "document": [f"hour_doc{i}" for i in range(1, 6)],
+            "created_at": [
+                "2023-04-01T00:15:00",
+                "2023-04-01T00:45:00",
+                "2023-04-01T01:05:00",
+                "2023-04-01T01:30:00",
+                "2023-04-01T02:00:00",
+            ],
+        }).with_columns(pl.col("created_at").str.to_datetime("%Y-%m-%dT%H:%M:%S"))
+        hourly_seq = hourly_df.text.sequential_analysis("created_at", frequency="hourly")
+        assert len(hourly_seq) == 3  # 3 hourly buckets
+        assert set(hourly_seq.get_column("time_period_formatted")) == {
+            "2023-04-01 00:00", "2023-04-01 01:00", "2023-04-01 02:00"
+        }
+
+        # Test quarterly sequences with data spanning two quarters
+        quarterly_df = pl.DataFrame({
+            "document": [f"q_doc{i}" for i in range(1, 7)],
+            "created_at": [
+                "2023-01-10",
+                "2023-02-15",
+                "2023-03-20",
+                "2023-04-05",
+                "2023-05-18",
+                "2023-06-22",
+            ],
+        }).with_columns(pl.col("created_at").str.to_datetime("%Y-%m-%d"))
+        quarterly_seq = quarterly_df.text.sequential_analysis("created_at", frequency="quarterly")
+        assert len(quarterly_seq) == 2
+        assert set(quarterly_seq.get_column("time_period_formatted")) == {
+            "2023-Q1", "2023-Q2"
+        }
+
+    def test_sequential_analysis_sorting(self):
+        """Test sorting options in sequential analysis"""
         dates = ["2023-03-01", "2023-01-01", "2023-02-01"]
         data = {"document": ["doc1", "doc2", "doc3"], "created_at": dates}
 
@@ -425,18 +460,18 @@ class TestDocDataFrame:
         )
 
         # Test with sorting (default) using text namespace
-        sorted_freq = df.text.frequency_analysis("created_at", frequency="monthly")
-        periods = sorted_freq.get_column("time_period_formatted").to_list()
+        sorted_seq = df.text.sequential_analysis("created_at", frequency="monthly")
+        periods = sorted_seq.get_column("time_period_formatted").to_list()
         assert periods == ["2023-01", "2023-02", "2023-03"]
 
         # Test without sorting
-        unsorted_freq = df.text.frequency_analysis(
+        unsorted_seq = df.text.sequential_analysis(
             "created_at", frequency="monthly", sort_by_time=False
         )
         # Should have same data but potentially different order
-        assert len(unsorted_freq) == 3
+        assert len(unsorted_seq) == 3
 
-    def test_frequency_analysis_invalid_frequency(self):
+    def test_sequential_analysis_invalid_frequency(self):
         """Test error handling for invalid frequency"""
         data = {
             "document": ["doc1", "doc2"],
@@ -448,6 +483,44 @@ class TestDocDataFrame:
         )
 
         with pytest.raises(ValueError, match="Unsupported frequency"):
-            df.text.frequency_analysis("created_at", frequency="hourly")
+            df.text.sequential_analysis("created_at", frequency="minutely")
+
+    def test_sequential_analysis_numeric_bins(self):
+        """Test numeric origin/interval binning"""
+
+        df = pl.DataFrame({
+            "document": [f"doc{i}" for i in range(1, 7)],
+            "score": [5, 12, 18, 25, 33, 41],
+        })
+
+        numeric_seq = df.text.sequential_analysis(
+            "score",
+            column_type="numeric",
+            numeric_origin=0,
+            numeric_interval=10,
+        )
+
+        assert set(numeric_seq.columns) >= {"time_period", "time_period_formatted", "sequential_count"}
+        formatted = numeric_seq.sort("time_period").get_column("time_period_formatted").to_list()
+        assert formatted == ["[0, 10)", "[10, 20)", "[20, 30)", "[30, 40)", "[40, 50)"]
+        counts = numeric_seq.sort("time_period").get_column("sequential_count").to_list()
+        assert counts == [1, 2, 1, 1, 1]
+
+        # Origin defaults to the minimum value when not provided
+        default_origin_seq = df.text.sequential_analysis(
+            "score",
+            column_type="numeric",
+            numeric_interval=20,
+        )
+        formatted_default = default_origin_seq.sort("time_period").get_column("time_period_formatted").to_list()
+        assert formatted_default[0].startswith("[5,")
+
+        # Invalid interval should raise
+        with pytest.raises(ValueError, match="numeric_interval"):
+            df.text.sequential_analysis(
+                "score",
+                column_type="numeric",
+                numeric_interval=0,
+            )
 
     # ...existing code...

@@ -622,71 +622,131 @@ class TextDataFrameNamespace:
         ])
         return df
 
-    def frequency_analysis(
+    def sequential_analysis(
         self,
         time_column: str,
         group_by_columns: Optional[List[str]] = None,
         frequency: str = "monthly",
         sort_by_time: bool = True,
+        column_type: str = "datetime",
+        numeric_origin: Optional[float] = None,
+        numeric_interval: Optional[float] = None,
     ) -> pl.DataFrame:
         """
-        Analyze frequency of records over time with optional grouping.
+        Analyze sequential records over time with optional grouping.
 
         Parameters
         ----------
         time_column : str
-            Name of the column containing datetime/date values
+            Name of the column containing datetime/date values or numeric values
         group_by_columns : List[str], optional
             Columns to group by (e.g., ['party', 'electorate']). If None, only time aggregation
         frequency : str, default "monthly"
-            Time frequency for aggregation. Options: 'daily', 'weekly', 'monthly', 'yearly'
+            Time frequency for aggregation. Options: 'hourly', 'daily', 'weekly', 'monthly', 'quarterly', 'yearly'
         sort_by_time : bool, default True
             Whether to sort results by time period
+        column_type : str, default "datetime"
+            Column interpretation mode. Options: 'datetime' or 'numeric'
+        numeric_origin : float, optional
+            Starting value for numeric bins (defaults to column minimum)
+        numeric_interval : float, optional
+            Bin width for numeric columns (required when column_type="numeric")
 
         Returns
         -------
         pl.DataFrame
-            DataFrame with frequency analysis results
+            DataFrame with sequential analysis results
 
         Examples
         --------
-        >>> # Monthly frequency by party
-        >>> freq_df = df.text.frequency_analysis('created_at', ['party'], frequency='monthly')
+        >>> # Monthly sequences by party
+        >>> seq_df = df.text.sequential_analysis('created_at', ['party'], frequency='monthly')
 
-        >>> # Daily frequency overall
-        >>> daily_freq = df.text.frequency_analysis('created_at', frequency='daily')
+        >>> # Daily sequences overall
+        >>> daily_seq = df.text.sequential_analysis('created_at', frequency='daily')
         """
-        if frequency not in ["daily", "weekly", "monthly", "yearly"]:
+
+        normalized_column_type = (column_type or "datetime").lower()
+        if normalized_column_type not in {"datetime", "numeric"}:
             raise ValueError(
-                f"Unsupported frequency: {frequency}. Use 'daily', 'weekly', 'monthly', or 'yearly'"
+                "Unsupported column_type. Use 'datetime' or 'numeric' for sequential analysis"
             )
 
-        # Create time period column based on frequency
-        time_format = ""  # Initialize to avoid linting warnings
-        if frequency == "daily":
-            time_expr = pl.col(time_column).dt.date().alias("time_period")
-            time_format = "%Y-%m-%d"
-        elif frequency == "weekly":
-            # Get Monday of the week
-            time_expr = (
-                pl.col(time_column).dt.truncate("1w").dt.date().alias("time_period")
+        valid_frequencies = ["hourly", "daily", "weekly", "monthly", "quarterly", "yearly"]
+        if normalized_column_type == "datetime" and frequency not in valid_frequencies:
+            raise ValueError(
+                "Unsupported frequency: {}. Use 'hourly', 'daily', 'weekly', 'monthly', 'quarterly', or 'yearly'".format(
+                    frequency
+                )
             )
-            time_format = "%Y-W%U"  # Year-Week format
-        elif frequency == "monthly":
-            time_expr = (
-                pl.col(time_column).dt.truncate("1mo").dt.date().alias("time_period")
-            )
-            time_format = "%Y-%m"
-        elif frequency == "yearly":
-            time_expr = pl.col(time_column).dt.year().alias("time_period")
-            time_format = "%Y"
+
+        df_with_period = self._df
+        time_format = ""
+        numeric_interval_value: Optional[float] = None
+        numeric_origin_value: Optional[float] = None
+
+        if normalized_column_type == "datetime":
+            if frequency == "hourly":
+                time_expr = pl.col(time_column).dt.truncate("1h").alias("time_period")
+                time_format = "%Y-%m-%d %H:%M"
+            elif frequency == "daily":
+                time_expr = pl.col(time_column).dt.date().alias("time_period")
+                time_format = "%Y-%m-%d"
+            elif frequency == "weekly":
+                time_expr = (
+                    pl.col(time_column).dt.truncate("1w").dt.date().alias("time_period")
+                )
+                time_format = "%Y-W%U"
+            elif frequency == "monthly":
+                time_expr = (
+                    pl.col(time_column).dt.truncate("1mo").dt.date().alias("time_period")
+                )
+                time_format = "%Y-%m"
+            elif frequency == "quarterly":
+                time_expr = (
+                    pl.col(time_column).dt.truncate("3mo").dt.date().alias("time_period")
+                )
+                time_format = "%Y-Q"
+            elif frequency == "yearly":
+                time_expr = pl.col(time_column).dt.truncate("1y").dt.date().alias("time_period")
+                time_format = "%Y"
+            else:  # pragma: no cover
+                time_expr = pl.col(time_column).dt.date().alias("time_period")
+                time_format = "%Y-%m-%d"
+
+            df_with_period = df_with_period.with_columns(time_expr)
         else:
-            # This should never happen due to the check above, but keeps linter happy
-            time_expr = pl.col(time_column).dt.date().alias("time_period")
-            time_format = "%Y-%m-%d"
+            if numeric_interval is None or numeric_interval <= 0:
+                raise ValueError("numeric_interval must be a positive number for numeric sequential analysis")
+            numeric_interval_value = float(numeric_interval)
+            if numeric_origin is not None:
+                numeric_origin_value = float(numeric_origin)
+            else:
+                origin_series = (
+                    df_with_period.select(pl.col(time_column).cast(pl.Float64()).min()).to_series()
+                )
+                numeric_origin_value = origin_series[0] if len(origin_series) else None
+            if numeric_origin_value is None:
+                raise ValueError("Unable to determine numeric_origin from the provided data")
 
-        # Build the aggregation
-        df_with_period = self._df.with_columns(time_expr)
+            df_with_period = df_with_period.with_columns([
+                pl.col(time_column).cast(pl.Float64()).alias("__numeric_value__"),
+            ])
+            df_with_period = df_with_period.with_columns([
+                (
+                    (pl.col("__numeric_value__") - pl.lit(numeric_origin_value))
+                    / pl.lit(numeric_interval_value)
+                )
+                .floor()
+                .cast(pl.Int64)
+                .alias("__numeric_bin__"),
+            ])
+            df_with_period = df_with_period.with_columns([
+                (
+                    pl.lit(numeric_origin_value)
+                    + pl.col("__numeric_bin__").cast(pl.Float64) * pl.lit(numeric_interval_value)
+                ).alias("time_period"),
+            ])
 
         # Determine grouping columns
         if group_by_columns is None:
@@ -696,27 +756,77 @@ class TextDataFrameNamespace:
 
         # Perform aggregation
         result_df = df_with_period.group_by(group_cols).agg([
-            pl.len().alias("frequency_count"),
+            pl.len().alias("sequential_count"),
             pl.col(time_column).min().alias("period_start"),
             pl.col(time_column).max().alias("period_end"),
         ])
 
         # Add formatted time period for display
-        if frequency == "weekly":
+        if normalized_column_type == "datetime":
+            if frequency == "weekly":
+                result_df = result_df.with_columns([
+                    pl.col("time_period")
+                    .dt.strftime("%Y-W%W")
+                    .alias("time_period_formatted")
+                ])
+            elif frequency == "quarterly":
+                result_df = result_df.with_columns([
+                    pl.col("time_period").dt.year().alias("__year__"),
+                    (
+                        (pl.col("time_period").dt.month() - 1)
+                        .floordiv(3)
+                        .add(1)
+                    ).alias("__quarter__"),
+                ])
+                result_df = result_df.with_columns([
+                    pl.format(
+                        "{}-Q{}",
+                        pl.col("__year__"),
+                        pl.col("__quarter__"),
+                    ).alias("time_period_formatted")
+                ]).drop(["__year__", "__quarter__"])
+            elif frequency == "yearly":
+                result_df = result_df.with_columns([
+                    pl.col("time_period").dt.strftime(time_format).alias("time_period_formatted")
+                ])
+            else:
+                result_df = result_df.with_columns([
+                    pl.col("time_period")
+                    .dt.strftime(time_format)
+                    .alias("time_period_formatted")
+                ])
+        else:
+            interval_lit = pl.lit(numeric_interval_value)
+            result_df = result_df.with_columns([
+                pl.col("time_period").round(6).alias("time_period"),
+                (
+                    pl.col("time_period") + interval_lit
+                ).alias("__numeric_period_end__"),
+            ])
+
+            def _format_numeric(value: Optional[float]) -> Optional[str]:
+                if value is None:
+                    return None
+                return format(value, ".6g")
+
             result_df = result_df.with_columns([
                 pl.col("time_period")
-                .dt.strftime("%Y-W%W")
-                .alias("time_period_formatted")
+                .map_elements(_format_numeric, return_dtype=pl.String)
+                .alias("__numeric_period_label_start__"),
+                pl.col("__numeric_period_end__")
+                .map_elements(_format_numeric, return_dtype=pl.String)
+                .alias("__numeric_period_label_end__"),
             ])
-        elif frequency in ["daily", "monthly"]:
             result_df = result_df.with_columns([
-                pl.col("time_period")
-                .dt.strftime(time_format)
-                .alias("time_period_formatted")
-            ])
-        else:  # yearly
-            result_df = result_df.with_columns([
-                pl.col("time_period").cast(pl.String).alias("time_period_formatted")
+                pl.format(
+                    "[{}, {})",
+                    pl.col("__numeric_period_label_start__"),
+                    pl.col("__numeric_period_label_end__"),
+                ).alias("time_period_formatted")
+            ]).drop([
+                "__numeric_period_end__",
+                "__numeric_period_label_start__",
+                "__numeric_period_label_end__",
             ])
 
         # Sort by time if requested
@@ -858,15 +968,18 @@ class TextLazyFrameNamespace:
             unnest=unnest,
         )
 
-    def frequency_analysis(
+    def sequential_analysis(
         self,
         time_column: str,
         group_by_columns: Optional[List[str]] = None,
         frequency: str = "monthly",
         sort_by_time: bool = True,
+        column_type: str = "datetime",
+        numeric_origin: Optional[float] = None,
+        numeric_interval: Optional[float] = None,
     ) -> pl.DataFrame:
         """
-        Analyze frequency of records over time with optional grouping.
+        Analyze sequential records over time with optional grouping.
 
         Parameters
         ----------
@@ -882,47 +995,99 @@ class TextLazyFrameNamespace:
         Returns
         -------
         pl.DataFrame
-            DataFrame with frequency analysis results
+            DataFrame with sequential analysis results
 
         Examples
         --------
-        >>> # Monthly frequency by party
-        >>> freq_df = lf.text.frequency_analysis('created_at', ['party'], frequency='monthly')
+        >>> # Monthly sequences by party
+        >>> seq_df = lf.text.sequential_analysis('created_at', ['party'], frequency='monthly')
 
-        >>> # Daily frequency overall
-        >>> daily_freq = lf.text.frequency_analysis('created_at', frequency='daily')
+        >>> # Daily sequences overall
+        >>> daily_seq = lf.text.sequential_analysis('created_at', frequency='daily')
         """
-        if frequency not in ["daily", "weekly", "monthly", "yearly"]:
+        normalized_column_type = (column_type or "datetime").lower()
+        if normalized_column_type not in {"datetime", "numeric"}:
             raise ValueError(
-                f"Unsupported frequency: {frequency}. Use 'daily', 'weekly', 'monthly', or 'yearly'"
+                "Unsupported column_type. Use 'datetime' or 'numeric' for sequential analysis"
             )
 
-        # Create time period column based on frequency
-        time_format = ""  # Initialize to avoid linting warnings
-        if frequency == "daily":
-            time_expr = pl.col(time_column).dt.date().alias("time_period")
-            time_format = "%Y-%m-%d"
-        elif frequency == "weekly":
-            # Get Monday of the week
-            time_expr = (
-                pl.col(time_column).dt.truncate("1w").dt.date().alias("time_period")
+        valid_frequencies = ["hourly", "daily", "weekly", "monthly", "quarterly", "yearly"]
+        if normalized_column_type == "datetime" and frequency not in valid_frequencies:
+            raise ValueError(
+                "Unsupported frequency: {}. Use 'hourly', 'daily', 'weekly', 'monthly', 'quarterly', or 'yearly'".format(
+                    frequency
+                )
             )
-            time_format = "%Y-W%U"  # Year-Week format
-        elif frequency == "monthly":
-            time_expr = (
-                pl.col(time_column).dt.truncate("1mo").dt.date().alias("time_period")
-            )
-            time_format = "%Y-%m"
-        elif frequency == "yearly":
-            time_expr = pl.col(time_column).dt.year().alias("time_period")
-            time_format = "%Y"
+
+        lf_with_period = self._lf
+        time_format = ""
+        numeric_interval_value: Optional[float] = None
+        numeric_origin_value: Optional[float] = None
+
+        if normalized_column_type == "datetime":
+            if frequency == "hourly":
+                time_expr = pl.col(time_column).dt.truncate("1h").alias("time_period")
+                time_format = "%Y-%m-%d %H:%M"
+            elif frequency == "daily":
+                time_expr = pl.col(time_column).dt.date().alias("time_period")
+                time_format = "%Y-%m-%d"
+            elif frequency == "weekly":
+                time_expr = (
+                    pl.col(time_column).dt.truncate("1w").dt.date().alias("time_period")
+                )
+                time_format = "%Y-W%U"
+            elif frequency == "monthly":
+                time_expr = (
+                    pl.col(time_column).dt.truncate("1mo").dt.date().alias("time_period")
+                )
+                time_format = "%Y-%m"
+            elif frequency == "quarterly":
+                time_expr = (
+                    pl.col(time_column).dt.truncate("3mo").dt.date().alias("time_period")
+                )
+                time_format = "%Y-Q"
+            elif frequency == "yearly":
+                time_expr = pl.col(time_column).dt.truncate("1y").dt.date().alias("time_period")
+                time_format = "%Y"
+            else:  # pragma: no cover
+                time_expr = pl.col(time_column).dt.date().alias("time_period")
+                time_format = "%Y-%m-%d"
+
+            lf_with_period = lf_with_period.with_columns(time_expr)
         else:
-            # This should never happen due to the check above, but keeps linter happy
-            time_expr = pl.col(time_column).dt.date().alias("time_period")
-            time_format = "%Y-%m-%d"
+            if numeric_interval is None or numeric_interval <= 0:
+                raise ValueError("numeric_interval must be a positive number for numeric sequential analysis")
+            numeric_interval_value = float(numeric_interval)
+            if numeric_origin is not None:
+                numeric_origin_value = float(numeric_origin)
+            else:
+                origin_series = (
+                    self._lf.select(pl.col(time_column).cast(pl.Float64()).min())
+                    .collect()
+                    .to_series()
+                )
+                numeric_origin_value = origin_series[0] if len(origin_series) else None
+            if numeric_origin_value is None:
+                raise ValueError("Unable to determine numeric_origin from the provided data")
 
-        # Build the aggregation
-        lf_with_period = self._lf.with_columns(time_expr)
+            lf_with_period = lf_with_period.with_columns([
+                pl.col(time_column).cast(pl.Float64()).alias("__numeric_value__"),
+            ])
+            lf_with_period = lf_with_period.with_columns([
+                (
+                    (pl.col("__numeric_value__") - pl.lit(numeric_origin_value))
+                    / pl.lit(numeric_interval_value)
+                )
+                .floor()
+                .cast(pl.Int64)
+                .alias("__numeric_bin__"),
+            ])
+            lf_with_period = lf_with_period.with_columns([
+                (
+                    pl.lit(numeric_origin_value)
+                    + pl.col("__numeric_bin__").cast(pl.Float64) * pl.lit(numeric_interval_value)
+                ).alias("time_period"),
+            ])
 
         # Determine grouping columns
         if group_by_columns is None:
@@ -932,27 +1097,77 @@ class TextLazyFrameNamespace:
 
         # Perform aggregation
         result_lf = lf_with_period.group_by(group_cols).agg([
-            pl.len().alias("frequency_count"),
+            pl.len().alias("sequential_count"),
             pl.col(time_column).min().alias("period_start"),
             pl.col(time_column).max().alias("period_end"),
         ])
 
         # Add formatted time period for display
-        if frequency == "weekly":
+        if normalized_column_type == "datetime":
+            if frequency == "weekly":
+                result_lf = result_lf.with_columns([
+                    pl.col("time_period")
+                    .dt.strftime("%Y-W%W")
+                    .alias("time_period_formatted")
+                ])
+            elif frequency == "quarterly":
+                result_lf = result_lf.with_columns([
+                    pl.col("time_period").dt.year().alias("__year__"),
+                    (
+                        (pl.col("time_period").dt.month() - 1)
+                        .floordiv(3)
+                        .add(1)
+                    ).alias("__quarter__"),
+                ])
+                result_lf = result_lf.with_columns([
+                    pl.format(
+                        "{}-Q{}",
+                        pl.col("__year__"),
+                        pl.col("__quarter__"),
+                    ).alias("time_period_formatted")
+                ]).drop(["__year__", "__quarter__"])
+            elif frequency == "yearly":
+                result_lf = result_lf.with_columns([
+                    pl.col("time_period").dt.strftime(time_format).alias("time_period_formatted")
+                ])
+            else:
+                result_lf = result_lf.with_columns([
+                    pl.col("time_period")
+                    .dt.strftime(time_format)
+                    .alias("time_period_formatted")
+                ])
+        else:
+            interval_lit = pl.lit(numeric_interval_value)
+            result_lf = result_lf.with_columns([
+                pl.col("time_period").round(6).alias("time_period"),
+                (
+                    pl.col("time_period") + interval_lit
+                ).alias("__numeric_period_end__"),
+            ])
+
+            def _format_numeric(value: Optional[float]) -> Optional[str]:
+                if value is None:
+                    return None
+                return format(value, ".6g")
+
             result_lf = result_lf.with_columns([
                 pl.col("time_period")
-                .dt.strftime("%Y-W%W")
-                .alias("time_period_formatted")
+                .map_elements(_format_numeric, return_dtype=pl.String)
+                .alias("__numeric_period_label_start__"),
+                pl.col("__numeric_period_end__")
+                .map_elements(_format_numeric, return_dtype=pl.String)
+                .alias("__numeric_period_label_end__"),
             ])
-        elif frequency in ["daily", "monthly"]:
             result_lf = result_lf.with_columns([
-                pl.col("time_period")
-                .dt.strftime(time_format)
-                .alias("time_period_formatted")
-            ])
-        else:  # yearly
-            result_lf = result_lf.with_columns([
-                pl.col("time_period").cast(pl.String).alias("time_period_formatted")
+                pl.format(
+                    "[{}, {})",
+                    pl.col("__numeric_period_label_start__"),
+                    pl.col("__numeric_period_label_end__"),
+                ).alias("time_period_formatted")
+            ]).drop([
+                "__numeric_period_end__",
+                "__numeric_period_label_start__",
+                "__numeric_period_label_end__",
             ])
 
         # Sort by time if requested
