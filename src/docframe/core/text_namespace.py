@@ -672,7 +672,14 @@ class TextDataFrameNamespace:
                 "Unsupported column_type. Use 'datetime' or 'numeric' for sequential analysis"
             )
 
-        valid_frequencies = ["hourly", "daily", "weekly", "monthly", "quarterly", "yearly"]
+        valid_frequencies = [
+            "hourly",
+            "daily",
+            "weekly",
+            "monthly",
+            "quarterly",
+            "yearly",
+        ]
         if normalized_column_type == "datetime" and frequency not in valid_frequencies:
             raise ValueError(
                 "Unsupported frequency: {}. Use 'hourly', 'daily', 'weekly', 'monthly', 'quarterly', or 'yearly'".format(
@@ -699,16 +706,24 @@ class TextDataFrameNamespace:
                 time_format = "%Y-W%U"
             elif frequency == "monthly":
                 time_expr = (
-                    pl.col(time_column).dt.truncate("1mo").dt.date().alias("time_period")
+                    pl.col(time_column)
+                    .dt.truncate("1mo")
+                    .dt.date()
+                    .alias("time_period")
                 )
                 time_format = "%Y-%m"
             elif frequency == "quarterly":
                 time_expr = (
-                    pl.col(time_column).dt.truncate("3mo").dt.date().alias("time_period")
+                    pl.col(time_column)
+                    .dt.truncate("3mo")
+                    .dt.date()
+                    .alias("time_period")
                 )
                 time_format = "%Y-Q"
             elif frequency == "yearly":
-                time_expr = pl.col(time_column).dt.truncate("1y").dt.date().alias("time_period")
+                time_expr = (
+                    pl.col(time_column).dt.truncate("1y").dt.date().alias("time_period")
+                )
                 time_format = "%Y"
             else:  # pragma: no cover
                 time_expr = pl.col(time_column).dt.date().alias("time_period")
@@ -717,17 +732,21 @@ class TextDataFrameNamespace:
             df_with_period = df_with_period.with_columns(time_expr)
         else:
             if numeric_interval is None or numeric_interval <= 0:
-                raise ValueError("numeric_interval must be a positive number for numeric sequential analysis")
+                raise ValueError(
+                    "numeric_interval must be a positive number for numeric sequential analysis"
+                )
             numeric_interval_value = float(numeric_interval)
             if numeric_origin is not None:
                 numeric_origin_value = float(numeric_origin)
             else:
-                origin_series = (
-                    df_with_period.select(pl.col(time_column).cast(pl.Float64()).min()).to_series()
-                )
+                origin_series = df_with_period.select(
+                    pl.col(time_column).cast(pl.Float64()).min()
+                ).to_series()
                 numeric_origin_value = origin_series[0] if len(origin_series) else None
             if numeric_origin_value is None:
-                raise ValueError("Unable to determine numeric_origin from the provided data")
+                raise ValueError(
+                    "Unable to determine numeric_origin from the provided data"
+                )
 
             df_with_period = df_with_period.with_columns([
                 pl.col(time_column).cast(pl.Float64()).alias("__numeric_value__"),
@@ -744,7 +763,8 @@ class TextDataFrameNamespace:
             df_with_period = df_with_period.with_columns([
                 (
                     pl.lit(numeric_origin_value)
-                    + pl.col("__numeric_bin__").cast(pl.Float64) * pl.lit(numeric_interval_value)
+                    + pl.col("__numeric_bin__").cast(pl.Float64)
+                    * pl.lit(numeric_interval_value)
                 ).alias("time_period"),
             ])
 
@@ -772,11 +792,9 @@ class TextDataFrameNamespace:
             elif frequency == "quarterly":
                 result_df = result_df.with_columns([
                     pl.col("time_period").dt.year().alias("__year__"),
-                    (
-                        (pl.col("time_period").dt.month() - 1)
-                        .floordiv(3)
-                        .add(1)
-                    ).alias("__quarter__"),
+                    ((pl.col("time_period").dt.month() - 1).floordiv(3).add(1)).alias(
+                        "__quarter__"
+                    ),
                 ])
                 result_df = result_df.with_columns([
                     pl.format(
@@ -787,7 +805,9 @@ class TextDataFrameNamespace:
                 ]).drop(["__year__", "__quarter__"])
             elif frequency == "yearly":
                 result_df = result_df.with_columns([
-                    pl.col("time_period").dt.strftime(time_format).alias("time_period_formatted")
+                    pl.col("time_period")
+                    .dt.strftime(time_format)
+                    .alias("time_period_formatted")
                 ])
             else:
                 result_df = result_df.with_columns([
@@ -799,9 +819,7 @@ class TextDataFrameNamespace:
             interval_lit = pl.lit(numeric_interval_value)
             result_df = result_df.with_columns([
                 pl.col("time_period").round(6).alias("time_period"),
-                (
-                    pl.col("time_period") + interval_lit
-                ).alias("__numeric_period_end__"),
+                (pl.col("time_period") + interval_lit).alias("__numeric_period_end__"),
             ])
 
             def _format_numeric(value: Optional[float]) -> Optional[str]:
@@ -1011,7 +1029,14 @@ class TextLazyFrameNamespace:
                 "Unsupported column_type. Use 'datetime' or 'numeric' for sequential analysis"
             )
 
-        valid_frequencies = ["hourly", "daily", "weekly", "monthly", "quarterly", "yearly"]
+        valid_frequencies = [
+            "hourly",
+            "daily",
+            "weekly",
+            "monthly",
+            "quarterly",
+            "yearly",
+        ]
         if normalized_column_type == "datetime" and frequency not in valid_frequencies:
             raise ValueError(
                 "Unsupported frequency: {}. Use 'hourly', 'daily', 'weekly', 'monthly', 'quarterly', or 'yearly'".format(
@@ -1038,16 +1063,24 @@ class TextLazyFrameNamespace:
                 time_format = "%Y-W%U"
             elif frequency == "monthly":
                 time_expr = (
-                    pl.col(time_column).dt.truncate("1mo").dt.date().alias("time_period")
+                    pl.col(time_column)
+                    .dt.truncate("1mo")
+                    .dt.date()
+                    .alias("time_period")
                 )
                 time_format = "%Y-%m"
             elif frequency == "quarterly":
                 time_expr = (
-                    pl.col(time_column).dt.truncate("3mo").dt.date().alias("time_period")
+                    pl.col(time_column)
+                    .dt.truncate("3mo")
+                    .dt.date()
+                    .alias("time_period")
                 )
                 time_format = "%Y-Q"
             elif frequency == "yearly":
-                time_expr = pl.col(time_column).dt.truncate("1y").dt.date().alias("time_period")
+                time_expr = (
+                    pl.col(time_column).dt.truncate("1y").dt.date().alias("time_period")
+                )
                 time_format = "%Y"
             else:  # pragma: no cover
                 time_expr = pl.col(time_column).dt.date().alias("time_period")
@@ -1056,7 +1089,9 @@ class TextLazyFrameNamespace:
             lf_with_period = lf_with_period.with_columns(time_expr)
         else:
             if numeric_interval is None or numeric_interval <= 0:
-                raise ValueError("numeric_interval must be a positive number for numeric sequential analysis")
+                raise ValueError(
+                    "numeric_interval must be a positive number for numeric sequential analysis"
+                )
             numeric_interval_value = float(numeric_interval)
             if numeric_origin is not None:
                 numeric_origin_value = float(numeric_origin)
@@ -1068,7 +1103,9 @@ class TextLazyFrameNamespace:
                 )
                 numeric_origin_value = origin_series[0] if len(origin_series) else None
             if numeric_origin_value is None:
-                raise ValueError("Unable to determine numeric_origin from the provided data")
+                raise ValueError(
+                    "Unable to determine numeric_origin from the provided data"
+                )
 
             lf_with_period = lf_with_period.with_columns([
                 pl.col(time_column).cast(pl.Float64()).alias("__numeric_value__"),
@@ -1085,7 +1122,8 @@ class TextLazyFrameNamespace:
             lf_with_period = lf_with_period.with_columns([
                 (
                     pl.lit(numeric_origin_value)
-                    + pl.col("__numeric_bin__").cast(pl.Float64) * pl.lit(numeric_interval_value)
+                    + pl.col("__numeric_bin__").cast(pl.Float64)
+                    * pl.lit(numeric_interval_value)
                 ).alias("time_period"),
             ])
 
@@ -1113,11 +1151,9 @@ class TextLazyFrameNamespace:
             elif frequency == "quarterly":
                 result_lf = result_lf.with_columns([
                     pl.col("time_period").dt.year().alias("__year__"),
-                    (
-                        (pl.col("time_period").dt.month() - 1)
-                        .floordiv(3)
-                        .add(1)
-                    ).alias("__quarter__"),
+                    ((pl.col("time_period").dt.month() - 1).floordiv(3).add(1)).alias(
+                        "__quarter__"
+                    ),
                 ])
                 result_lf = result_lf.with_columns([
                     pl.format(
@@ -1128,7 +1164,9 @@ class TextLazyFrameNamespace:
                 ]).drop(["__year__", "__quarter__"])
             elif frequency == "yearly":
                 result_lf = result_lf.with_columns([
-                    pl.col("time_period").dt.strftime(time_format).alias("time_period_formatted")
+                    pl.col("time_period")
+                    .dt.strftime(time_format)
+                    .alias("time_period_formatted")
                 ])
             else:
                 result_lf = result_lf.with_columns([
@@ -1140,9 +1178,7 @@ class TextLazyFrameNamespace:
             interval_lit = pl.lit(numeric_interval_value)
             result_lf = result_lf.with_columns([
                 pl.col("time_period").round(6).alias("time_period"),
-                (
-                    pl.col("time_period") + interval_lit
-                ).alias("__numeric_period_end__"),
+                (pl.col("time_period") + interval_lit).alias("__numeric_period_end__"),
             ])
 
             def _format_numeric(value: Optional[float]) -> Optional[str]:

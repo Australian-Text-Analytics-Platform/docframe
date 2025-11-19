@@ -426,10 +426,14 @@ class TestDocDataFrame:
                 "2023-04-01T02:00:00",
             ],
         }).with_columns(pl.col("created_at").str.to_datetime("%Y-%m-%dT%H:%M:%S"))
-        hourly_seq = hourly_df.text.sequential_analysis("created_at", frequency="hourly")
+        hourly_seq = hourly_df.text.sequential_analysis(
+            "created_at", frequency="hourly"
+        )
         assert len(hourly_seq) == 3  # 3 hourly buckets
         assert set(hourly_seq.get_column("time_period_formatted")) == {
-            "2023-04-01 00:00", "2023-04-01 01:00", "2023-04-01 02:00"
+            "2023-04-01 00:00",
+            "2023-04-01 01:00",
+            "2023-04-01 02:00",
         }
 
         # Test quarterly sequences with data spanning two quarters
@@ -444,10 +448,13 @@ class TestDocDataFrame:
                 "2023-06-22",
             ],
         }).with_columns(pl.col("created_at").str.to_datetime("%Y-%m-%d"))
-        quarterly_seq = quarterly_df.text.sequential_analysis("created_at", frequency="quarterly")
+        quarterly_seq = quarterly_df.text.sequential_analysis(
+            "created_at", frequency="quarterly"
+        )
         assert len(quarterly_seq) == 2
         assert set(quarterly_seq.get_column("time_period_formatted")) == {
-            "2023-Q1", "2023-Q2"
+            "2023-Q1",
+            "2023-Q2",
         }
 
     def test_sequential_analysis_sorting(self):
@@ -500,10 +507,20 @@ class TestDocDataFrame:
             numeric_interval=10,
         )
 
-        assert set(numeric_seq.columns) >= {"time_period", "time_period_formatted", "sequential_count"}
-        formatted = numeric_seq.sort("time_period").get_column("time_period_formatted").to_list()
+        assert set(numeric_seq.columns) >= {
+            "time_period",
+            "time_period_formatted",
+            "sequential_count",
+        }
+        formatted = (
+            numeric_seq.sort("time_period")
+            .get_column("time_period_formatted")
+            .to_list()
+        )
         assert formatted == ["[0, 10)", "[10, 20)", "[20, 30)", "[30, 40)", "[40, 50)"]
-        counts = numeric_seq.sort("time_period").get_column("sequential_count").to_list()
+        counts = (
+            numeric_seq.sort("time_period").get_column("sequential_count").to_list()
+        )
         assert counts == [1, 2, 1, 1, 1]
 
         # Origin defaults to the minimum value when not provided
@@ -512,7 +529,11 @@ class TestDocDataFrame:
             column_type="numeric",
             numeric_interval=20,
         )
-        formatted_default = default_origin_seq.sort("time_period").get_column("time_period_formatted").to_list()
+        formatted_default = (
+            default_origin_seq.sort("time_period")
+            .get_column("time_period_formatted")
+            .to_list()
+        )
         assert formatted_default[0].startswith("[5,")
 
         # Invalid interval should raise
