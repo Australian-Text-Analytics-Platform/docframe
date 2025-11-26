@@ -37,6 +37,24 @@ class TestIOOperations:
             yield f.name
         os.unlink(f.name)
 
+    @pytest.fixture
+    def temp_text_file(self):
+        """Create a temporary text file"""
+        tmp_file = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, encoding="utf-8"
+        )
+        try:
+            tmp_file.write("Plain text document for testing.")
+            tmp_file.flush()
+            file_path = tmp_file.name
+        finally:
+            tmp_file.close()
+
+        try:
+            yield file_path
+        finally:
+            os.unlink(file_path)
+
     def test_read_csv_with_document_column(self, temp_csv):
         """Test reading CSV with specified document column"""
         doc_df = docframe.read_csv(temp_csv, document_column="article")
@@ -156,20 +174,43 @@ class TestIOOperations:
         doc_df = docframe.read_zip(zip_path)
 
         assert isinstance(doc_df, DocDataFrame)
-        assert doc_df.active_document_name == "text"
+        assert doc_df.active_document_name == "document"
 
         df = doc_df.dataframe
         # Archive contains three text files: 1.txt, 2.md, 3 (no extension)
         assert df.shape == (3, 4)
-        assert set(df.columns) == {"file_path", "base_name", "extension", "text"}
+        assert set(df.columns) == {"file_path", "base_name", "extension", "document"}
 
         assert sorted(df["base_name"].to_list()) == ["1", "2", "3"]
         assert sorted(df["extension"].to_list()) == ["", ".md", ".txt"]
         sample_row = (
-            df.filter(pl.col("base_name") == "1").select("text").to_series().item()
+            df.filter(pl.col("base_name") == "1").select("document").to_series().item()
         )
         assert "Eldoria" in sample_row
 
         raw_df = docframe.read_zip(zip_path, document_column=False)
         assert isinstance(raw_df, pl.DataFrame)
-        assert "text" in raw_df.columns
+        assert "document" in raw_df.columns
+
+    def test_read_text_single_column(self, temp_text_file):
+        """Plain text files should produce DocDataFrames with a single document column."""
+
+        doc_df = docframe.read_text(temp_text_file)
+
+        assert isinstance(doc_df, DocDataFrame)
+        assert doc_df.active_document_name == "document"
+
+        df = doc_df.dataframe
+        assert df.shape == (1, 1)
+        assert df.columns == ["document"]
+        assert df["document"].item(0) == "Plain text document for testing."
+
+    def test_read_text_without_docframe(self, temp_text_file):
+        """document_column=False should return a plain Polars DataFrame."""
+
+        raw_df = docframe.read_text(temp_text_file, document_column=False)
+
+        assert isinstance(raw_df, pl.DataFrame)
+        assert raw_df.shape == (1, 1)
+        assert raw_df.columns == ["document"]
+        assert raw_df["document"].item(0) == "Plain text document for testing."

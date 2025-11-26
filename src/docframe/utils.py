@@ -166,7 +166,7 @@ def _read_zip(
     Returns
     -------
     polars.DataFrame
-        DataFrame with columns ``file_path``, ``base_name``, ``extension`` and ``text``.
+        DataFrame with columns ``file_path``, ``base_name``, ``extension`` and ``document``.
     """
 
     archive_path = Path(path)
@@ -221,7 +221,7 @@ def _read_zip(
                 "file_path": file_path,
                 "base_name": base_name,
                 "extension": extension,
-                "text": text_content,
+                "document": text_content,
             })
 
     records.sort(key=lambda entry: entry["file_path"])
@@ -232,7 +232,7 @@ def _read_zip(
             "file_path": pl.String,
             "base_name": pl.String,
             "extension": pl.String,
-            "text": pl.String,
+            "document": pl.String,
         },
     )
 
@@ -278,6 +278,26 @@ except ImportError:
 _read_zip_wrapped = docio(_read_zip)
 
 
+def _read_text_file(
+    path: str | Path,
+    *,
+    encoding: str = "utf-8",
+    errors: str = "ignore",
+) -> pl.DataFrame:
+    """Read a plain-text file into a single-column DataFrame."""
+
+    file_path = Path(path)
+    if not file_path.exists():
+        raise FileNotFoundError(f"Text file not found: {file_path}")
+
+    text_content = file_path.read_text(encoding=encoding, errors=errors)
+
+    return pl.DataFrame({"document": [text_content]}, schema={"document": pl.String})
+
+
+_read_text_wrapped = docio(_read_text_file)
+
+
 def read_zip(
     path: str | Path,
     *,
@@ -285,7 +305,7 @@ def read_zip(
     errors: str = "ignore",
     text_extensions: Iterable[str] | None = None,
     include_extensionless: bool = True,
-    document_column: str | None = "text",
+    document_column: str | None = "document",
 ):
     """Read textual members from a ZIP archive into a DocDataFrame."""
 
@@ -295,6 +315,23 @@ def read_zip(
         errors=errors,
         text_extensions=text_extensions,
         include_extensionless=include_extensionless,
+        document_column=document_column,
+    )
+
+
+def read_text(
+    path: str | Path,
+    *,
+    encoding: str = "utf-8",
+    errors: str = "ignore",
+    document_column: str | None = "document",
+):
+    """Read a single plain-text document into a DocDataFrame."""
+
+    return _read_text_wrapped(
+        path,
+        encoding=encoding,
+        errors=errors,
         document_column=document_column,
     )
 

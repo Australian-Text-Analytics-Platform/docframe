@@ -19,7 +19,7 @@ DocFrame is a GeoPandas-inspired text analysis library built on Polars, providin
 
 ## Architecture Diagram
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                         User Interface                          │
 │  DocDataFrame, DocLazyFrame, docio-wrapped I/O functions       │
@@ -427,10 +427,47 @@ df = read_csv('data.csv', document_column=False)
 lazy_df = scan_parquet('large_data.parquet')
 ```
 
+#### Custom Readers (`read_zip`, `read_text`)
+
+While the majority of inputs come directly from Polars readers, DocFrame also ships
+specialized helpers for raw text ingestion. Both functions reuse `docio`, so they
+honor the same `document_column` contract and gracefully downgrade to plain Polars
+objects when requested.
+
+- `read_zip(path, *, encoding="utf-8", errors="ignore", text_extensions=None, include_extensionless=True)`
+  - Streams textual members out of an archive, emitting one row per file with
+    columns `file_path`, `base_name`, `extension`, and `document`.
+  - Defaults the active document column to `document`, enabling downstream text
+    namespace operations immediately while still exposing lightweight metadata
+    for file provenance.
+
+- `read_text(path, *, encoding="utf-8", errors="ignore")`
+  - Materializes a single-document DocDataFrame from any plain-text file.
+  - Always emits a minimalist one-column schema (`document`) so single-file
+    ingestion mirrors the payload shape produced by archive reads.
+  - Passing `document_column=False` returns a plain Polars DataFrame with the
+    same schema for callers that prefer to opt out of DocDataFrame semantics.
+
+**Example**:
+
+```python
+import docframe
+
+doc_df = docframe.read_text("/data/notes.md")
+assert doc_df.active_document_name == "document"
+
+# Drop DocDataFrame semantics when only the raw document content is needed
+raw_df = docframe.read_text(
+  "/data/notes.md", document_column=False
+)
+assert raw_df.columns == ["document"]
+```
+
 ## Data Flow Patterns
 
 ### Pattern 1: Document Column Auto-Detection
-```
+
+```text
 User calls I/O function
     ↓
 docio decorator intercepts
@@ -449,7 +486,7 @@ Return with active document column set
 
 ### Pattern 2: Text Namespace Method Call
 
-```
+```text
 User calls df.select(pl.col('text').text.tokenize())
     ↓
 Polars resolves pl.col('text').text
@@ -471,7 +508,7 @@ map_elements applies tokenize() from text_utils to each cell
 
 ### Pattern 3: DocDataFrame Text Operation
 
-```
+```text
 User calls doc_df.add_word_count()
     ↓
 DocDataFrame checks self._document_column_name (active document column)
@@ -495,7 +532,7 @@ Returns new DocDataFrame with updated _df and same _document_column_name
 
 ### Pattern 4: DTM Creation Pipeline
 
-```
+```text
 User calls doc_df.to_dtm(method='tfidf')
     ↓
 DocDataFrame.to_dtm():
@@ -525,7 +562,7 @@ DocDataFrame.to_dtm() returns dtm_df as Polars DataFrame
 
 #### Text Analysis Chain
 
-```
+```text
 DocDataFrame.describe_text()
   → Calls self.document.text.word_count() (and other metrics)
     → TextSeriesNamespace.word_count()
@@ -540,7 +577,7 @@ DocDataFrame.describe_text()
 
 #### Token Frequency Analysis
 
-```
+```text
 compute_token_frequencies(df, token_column='tokens', group_columns=['category'])
   → Validates inputs (DocDataFrame/DocLazyFrame)
   → Collects tokens from each frame
@@ -563,7 +600,7 @@ compute_token_frequencies(df, token_column='tokens', group_columns=['category'])
 
 #### DTM Creation
 
-```
+```text
 DocDataFrame.to_dtm(method='tfidf', min_df=2, max_df=0.95)
   → Get document series: self.document
   → Tokenize if needed: 
@@ -581,7 +618,7 @@ DocDataFrame.to_dtm(method='tfidf', min_df=2, max_df=0.95)
 
 #### Concordance Extraction
 
-```
+```text
 pl.col('text').text.concordance('climate', num_left_tokens=10, num_right_tokens=10)
   → TextExprNamespace.concordance(search_word='climate', ...)
     → Creates wrapper function: _conc(text) that calls concordance_elements()
@@ -605,7 +642,7 @@ pl.col('text').text.concordance('climate', num_left_tokens=10, num_right_tokens=
 
 ### Initialization Dependencies
 
-```
+```text
 import docframe
   → Executes src/docframe/__init__.py
     → Imports from core.docframe: DocDataFrame, DocLazyFrame
@@ -626,8 +663,10 @@ import docframe
 ## Extension Points for AI Tools
 
 ### 1. Adding New Text Operations
+
 **Where**: `core/text_namespace.py`  
 **Pattern**:
+
 ```python
 # In TextExprNamespace
 def new_operation(self, param: str) -> pl.Expr:
@@ -655,8 +694,10 @@ def new_operation(self, column: str, param: str) -> pl.DataFrame:
 ```
 
 ### 2. Adding Custom Document Methods
+
 **Where**: `core/docframe.py` in `DocDataFrame`  
 **Pattern**:
+
 ```python
 def custom_analysis(self) -> pl.DataFrame:
     """Custom document analysis"""
@@ -668,16 +709,20 @@ def custom_analysis(self) -> pl.DataFrame:
 ```
 
 ### 3. Adding New I/O Formats
+
 **Where**: `utils.py`  
 **Pattern**:
+
 ```python
 from polars import read_custom_format as _read_custom
 read_custom_format = docio(_read_custom)
 ```
 
 ### 4. Integrating ML Libraries
+
 **Where**: `core/text_utils.py` or new module  
 **Pattern**:
+
 ```python
 def custom_model(df: DocDataFrame, **kwargs):
     """Custom ML pipeline"""
@@ -697,16 +742,19 @@ def custom_model(df: DocDataFrame, **kwargs):
 ## Performance Considerations
 
 ### Lazy vs Eager Execution
+
 - **DocLazyFrame**: Use for large datasets, chains operations without execution
 - **DocDataFrame**: Use when immediate results needed or dataset fits in memory
 - **Best Practice**: Build pipelines with LazyFrame, materialize with `.collect()` at the end
 
 ### Text Namespace Efficiency
+
 - **Expression-level** operations are lazy and benefit from Polars query optimization
 - **Series-level** operations are eager and execute immediately
 - **Preference**: Use expressions in `select()`/`with_columns()` over series operations
 
 ### Auto-Detection Cost
+
 - `guess_document_column()` computes average text length for all string columns
 - **Mitigation**: Explicitly specify `document_column` when reading large files
 - **Caching**: DocDataFrame stores `_document_column` after detection
@@ -714,6 +762,7 @@ def custom_model(df: DocDataFrame, **kwargs):
 ## Testing Strategy
 
 ### Test Coverage Areas
+
 1. **Namespace Registration**: Verify `.text` accessible on all Polars types
 2. **Document Auto-Detection**: Test heuristic with various data patterns
 3. **Text Operations**: Unit tests for each namespace method
@@ -722,6 +771,7 @@ def custom_model(df: DocDataFrame, **kwargs):
 6. **Edge Cases**: Empty strings, None values, non-string columns
 
 ### Test Files
+
 - `test_namespace.py`: Namespace registration and method calls
 - `test_core.py`: DocDataFrame/DocLazyFrame core functionality
 - `test_text_processing.py`: Text operation correctness
@@ -731,6 +781,7 @@ def custom_model(df: DocDataFrame, **kwargs):
 ## Common Usage Patterns for AI Tools
 
 ### Pattern 1: Quick Text Statistics
+
 ```python
 import docframe as df
 
@@ -741,6 +792,7 @@ print(f"Active document column: {doc_df.active_document_name}")
 ```
 
 ### Pattern 2: Text Preprocessing Pipeline
+
 ```python
 processed = (
     df.read_csv('raw_data.csv', document_column='content')
@@ -751,6 +803,7 @@ processed = (
 ```
 
 ### Pattern 3: Token Frequency Analysis with Grouping
+
 ```python
 from docframe import compute_token_frequencies
 
@@ -765,6 +818,7 @@ freq_df = compute_token_frequencies(
 ```
 
 ### Pattern 4: KWIC Concordance Search
+
 ```python
 concordances = (
     doc_df
@@ -778,6 +832,7 @@ concordances = (
 ```
 
 ### Pattern 5: Document-Term Matrix for ML
+
 ```python
 # Create DTM
 dtm = doc_df.to_dtm(method='tfidf', min_df=2, max_df=0.95)
@@ -791,18 +846,22 @@ topics = model.fit_transform(dtm.to_numpy())
 ## Troubleshooting Guide
 
 ### Issue: Text namespace not available
+
 **Cause**: `import docframe` not called  
 **Solution**: Import docframe before using `pl.col().text.*`
 
 ### Issue: Document column auto-detection fails
+
 **Cause**: No string columns or ambiguous text columns  
 **Solution**: Explicitly specify `document_column='column_name'`
 
 ### Issue: DTM creation slow on large corpus
+
 **Cause**: Eager tokenization of entire dataset  
 **Solution**: Use DocLazyFrame and materialize only DTM result
 
 ### Issue: NLTK data not found
+
 **Cause**: First-time NLTK usage without downloads  
 **Solution**: Functions auto-download; ensure internet connection or pre-download with `nltk.download('punkt')`
 
@@ -818,12 +877,14 @@ topics = model.fit_transform(dtm.to_numpy())
 ## Conclusion
 
 DocFrame's architecture emphasizes:
+
 - **Composability**: Polars operations + text operations work seamlessly
 - **Extensibility**: Namespace pattern allows easy addition of new text methods
 - **Performance**: Lazy-by-default with Polars backend for scalability
 - **Simplicity**: Auto-detection and intuitive API reduce boilerplate
 
 AI tools can leverage DocFrame by:
+
 - Using `guess_document_column()` for intelligent column detection
 - Calling text namespace methods for standardized text processing
 - Building on `compute_token_frequencies()` for frequency analysis
