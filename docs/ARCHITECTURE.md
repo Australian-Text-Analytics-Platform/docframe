@@ -463,6 +463,12 @@ raw_df = docframe.read_text(
 assert raw_df.columns == ["document"]
 ```
 
+#### Excel helpers and fastexcel availability
+
+- `read_excel` is wrapped by `docio`, but before calling into `polars.read_excel` the helper simply ensures that the `fastexcel` wheel is importable and then **removes any caller-provided `engine` keyword**. This lets Polars pick whichever engine name matches the current release (its default is `"calamine"` as of 1.0) while still surfacing a friendly `ImportError` whenever the underlying bindings are missing. Higher layers (FastAPI, notebooks, etc.) never need to reason about Polars engine flags again—installing `fastexcel` is the only precondition.
+- `excel_sheet_names(path: str | Path) -> List[str]` shares the same contract: it ensures `fastexcel` is available, calls `polars.read_excel(path, sheet_id=None)` without forcing an engine, and returns the declared worksheet order. When Polars returns a single `DataFrame` (single-sheet workbooks), the helper falls back to `['Sheet1']` to keep the backend sheet picker happy.
+- Both helpers accept arbitrary keyword arguments from Polars, so callers can pass `sheet_name`/`sheet_id` while still opting out of DocDataFrame semantics by supplying `document_column=False`.
+
 ## Data Flow Patterns
 
 ### Pattern 1: Document Column Auto-Detection

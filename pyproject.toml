@@ -11,7 +11,8 @@ dependencies = [
     "polars>=1.0.0",
     "spacy>=3.7.0",
     "nltk>=3.8",
-    "bertopic>=0.17.3",  # Includes scikit-learn, numpy, pandas as transitive dependencies
+    "bertopic>=0.17.3", # Includes scikit-learn, numpy, pandas as transitive dependencies
+    "fastexcel>=0.18.0",
 ]
 
 [project.optional-dependencies]

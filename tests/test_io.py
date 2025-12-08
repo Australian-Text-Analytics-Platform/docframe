@@ -1,15 +1,15 @@
-"""
-Test I/O operations for DocFrame
-"""
+"""Test I/O operations for DocFrame."""
 
 import os
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 import pytest
 
 import docframe
+import docframe.utils as df_utils
 from docframe import DocDataFrame
 
 
@@ -214,3 +214,84 @@ class TestIOOperations:
         assert raw_df.shape == (1, 1)
         assert raw_df.columns == ["document"]
         assert raw_df["document"].item(0) == "Plain text document for testing."
+
+    def test_excel_sheet_names_use_polars_default_engine(self, monkeypatch):
+        """DocFrame should defer to Polars defaults without forcing an engine."""
+
+        ensured = {"called": False}
+        captured_kwargs: list[dict[str, Any]] = []
+
+        def fake_ensure():
+            ensured["called"] = True
+
+        def fake_read_excel(*args, **kwargs):
+            captured_kwargs.append(kwargs.copy())
+            assert kwargs.get("sheet_id") is None
+            return {
+                "Alpha": pl.DataFrame({"x": [1]}),
+                "Beta": pl.DataFrame({"x": [2]}),
+            }
+
+        monkeypatch.setattr(df_utils, "_ensure_fastexcel_available", fake_ensure)
+        monkeypatch.setattr(df_utils, "_read_excel", fake_read_excel)
+
+        sheets = docframe.excel_sheet_names("dummy.xlsx")
+
+        assert ensured["called"] is True
+        assert captured_kwargs == [{"sheet_id": None}]
+        assert sheets == ["Alpha", "Beta"]
+
+    def test_excel_sheet_names_single_sheet_dataframe(self, monkeypatch):
+        """When Polars returns a DataFrame, fallback sheet naming should apply."""
+
+        monkeypatch.setattr(df_utils, "_ensure_fastexcel_available", lambda: None)
+        monkeypatch.setattr(
+            df_utils,
+            "_read_excel",
+            lambda *args, **kwargs: pl.DataFrame({"x": [1, 2]}),
+        )
+
+        sheets = docframe.excel_sheet_names("solo.xlsx")
+
+        assert sheets == ["Sheet1"]
+
+    def test_read_excel_strips_engine_kwarg(self, monkeypatch, tmp_path):
+        """DocFrame should remove any caller-provided engine hint."""
+
+        ensured = {"called": False}
+        captured_kwargs: list[dict[str, Any]] = []
+
+        def fake_ensure():
+            ensured["called"] = True
+
+        def fake_read_excel(*args, **kwargs):
+            captured_kwargs.append(kwargs.copy())
+            return pl.DataFrame({"value": [1]})
+
+        monkeypatch.setattr(df_utils, "_ensure_fastexcel_available", fake_ensure)
+        monkeypatch.setattr(df_utils, "_read_excel", fake_read_excel)
+
+        result = docframe.read_excel(
+            tmp_path / "sample.xlsx",
+            document_column=False,
+            engine="openpyxl",
+        )
+
+        assert ensured["called"] is True
+        assert captured_kwargs == [{}]
+        assert isinstance(result, pl.DataFrame)
+
+    def test_read_excel_missing_engine_dependency(self, monkeypatch, tmp_path):
+        """Module import errors from Polars should be surfaced as ImportError."""
+
+        monkeypatch.setattr(df_utils, "_ensure_fastexcel_available", lambda: None)
+
+        def fake_read_excel(*_, **__):
+            raise ModuleNotFoundError("fastexcel not installed")
+
+        monkeypatch.setattr(df_utils, "_read_excel", fake_read_excel)
+
+        with pytest.raises(ImportError) as exc:
+            docframe.read_excel(tmp_path / "missing.xlsx", document_column=False)
+
+        assert "Polars could not import its default Excel engine" in str(exc.value)

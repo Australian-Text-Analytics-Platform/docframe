@@ -238,12 +238,34 @@ def _read_zip(
 
 
 # Conditionally import and wrap functions that may not exist in all polars versions
+def _ensure_fastexcel_available() -> None:
+    try:
+        import fastexcel  # noqa: F401
+    except ImportError as exc:
+        raise ImportError(
+            "DocFrame Excel support requires the 'fastexcel' package. "
+            "Install it via 'uv add fastexcel' or 'pip install fastexcel'."
+        ) from exc
+
+
 try:
     from polars import read_excel as _read_excel
+except ImportError:  # pragma: no cover - dependent on polars build
+    _read_excel = None
+else:
 
-    read_excel = docio(_read_excel)
-except ImportError:
-    pass
+    def _docframe_read_excel(*args, **kwargs):
+        _ensure_fastexcel_available()
+        kwargs.pop("engine", None)
+        try:
+            return _read_excel(*args, **kwargs)
+        except ModuleNotFoundError as exc:  # pragma: no cover - fastexcel missing
+            raise ImportError(
+                "Polars could not import its default Excel engine bindings. "
+                "Ensure the 'fastexcel' package is installed."
+            ) from exc
+
+    read_excel = docio(_docframe_read_excel)
 
 try:
     from polars import read_database as _read_database
@@ -334,6 +356,30 @@ def read_text(
         errors=errors,
         document_column=document_column,
     )
+
+
+def excel_sheet_names(path: str | Path) -> List[str]:
+    """Return the available worksheet names for an Excel workbook."""
+
+    if _read_excel is None:  # pragma: no cover - depends on polars build
+        raise ImportError(
+            "This version of Polars does not ship with read_excel support"
+        )
+
+    _ensure_fastexcel_available()
+    try:
+        sheets = _read_excel(path, sheet_id=None)
+    except ModuleNotFoundError as exc:  # pragma: no cover - fastexcel missing
+        raise ImportError(
+            "Polars could not import its default Excel engine bindings. Ensure fastexcel is installed."
+        ) from exc
+
+    if isinstance(sheets, dict):
+        return list(sheets.keys())
+    if isinstance(sheets, pl.DataFrame):
+        # Polars returns a DataFrame when sheet_id=None on single-sheet workbooks
+        return ["Sheet1"]
+    return []
 
 
 def concat_documents(

@@ -10,6 +10,7 @@ from .core.text_utils import compute_token_frequencies
 # Import utilities for convenient access
 from .utils import (
     concat_documents,
+    excel_sheet_names,
     from_arrow,
     from_numpy,
     from_pandas,
@@ -54,4 +55,5 @@ __all__ = [
     "from_numpy",
     "concat_documents",
     "info",
+    "excel_sheet_names",
 ]
