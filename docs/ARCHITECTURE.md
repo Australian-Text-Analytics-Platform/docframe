@@ -312,7 +312,7 @@ sentiment_bins = (
   - **Implementation**: Heuristic quotation detection using paired quote characters
   - **Algorithm**: Scans for opening quotes (", ', «, etc.), finds matching closing quotes, tracks nesting depth
   - **Validation**: Checks quote balance, identifies floating quotes (quotes without matching pairs)
-  - **Returns**: List of dicts with quote_text, quote_type, token_count, is_floating_quote
+  - **Returns**: List of dicts with quote_text, speaker/verb text + indices (None when missing), quote_type, token_count, is_floating_quote
   - **Dependencies**: Uses `tokenize()` for token counting
   
 - `compute_token_frequencies(df, token_column, group_columns, method, normalize, min_freq, top_n)`:

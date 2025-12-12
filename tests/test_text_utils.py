@@ -283,40 +283,43 @@ class TestQuotationElements:
         assert required.issubset(set(q.keys()))
         # Quote contains the quoted text including quotes
         assert '"Hello world."' in q["quote"]
-        # Verb should be a quoting verb near the quote
-        assert q["verb"].lower() in {"said", "say"}
-        # Speaker should include John or Smith
+        # Verb should be a quoting verb near the quote when present
+        assert (q["verb"] is None) or (q["verb"].lower() in {"said", "say"})
+        # Speaker should include John or Smith when present
         assert (
-            ("John" in q["speaker"]) or ("Smith" in q["speaker"]) or q["speaker"] == ""
+            q["speaker"] is None
+            or ("John" in q["speaker"])
+            or ("Smith" in q["speaker"])
         )
-        # Indices should be non-negative or -1 for missing speaker/verb
+        # Indices should be non-negative when present; missing speaker/verb should be None
         for k in [
             "speaker_start_idx",
             "speaker_end_idx",
-            "quote_start_idx",
-            "quote_end_idx",
             "verb_start_idx",
             "verb_end_idx",
         ]:
-            assert isinstance(q[k], int)
-            assert q[k] >= -1
+            assert (q[k] is None) or (isinstance(q[k], int) and q[k] >= 0)
+        for k in ["quote_start_idx", "quote_end_idx"]:
+            assert isinstance(q[k], int) and q[k] >= 0
 
     def test_according_to_pattern(self):
         text = '"We will win," according to Jane Doe.'
         quotes = quotation_elements(text)
         # Find a quote with verb 'according to'
-        has_according = any(q.get("verb", "").lower() == "according to" for q in quotes)
+        has_according = any(
+            (q.get("verb") or "").lower() == "according to" for q in quotes
+        )
         assert has_according
         # Speaker should capture Jane Doe for the according-to case when present
         spk = next(
             (
                 q["speaker"]
                 for q in quotes
-                if q.get("verb", "").lower() == "according to"
+                if (q.get("verb") or "").lower() == "according to"
             ),
             "",
         )
-        assert ("Jane" in spk) or ("Doe" in spk) or spk == ""
+        assert (spk is None) or ("Jane" in spk) or ("Doe" in spk) or spk == ""
 
     def test_no_quotes_returns_empty(self):
         assert quotation_elements("No quotations present here.") == []

@@ -379,30 +379,37 @@ class _SentenceInfo(NamedTuple):
 @dataclass
 class _QuoteRecord:
     speaker: str
-    speaker_start_idx: int
-    speaker_end_idx: int
+    speaker_start_idx: Optional[int]
+    speaker_end_idx: Optional[int]
     quote: str
     quote_start_idx: int
     quote_end_idx: int
     verb: str
-    verb_start_idx: int
-    verb_end_idx: int
+    verb_start_idx: Optional[int]
+    verb_end_idx: Optional[int]
     quote_type: str
     quote_token_count: int
     is_floating_quote: bool
     sentence_index: int
 
     def to_public_dict(self) -> Dict[str, Any]:
+        def _idx_or_none(value: int) -> Optional[int]:
+            return None if value is None or value < 0 else int(value)
+
+        def _text_or_none(value: str) -> Optional[str]:
+            value = value or ""
+            return value if value.strip() else None
+
         return {
-            "speaker": self.speaker,
-            "speaker_start_idx": int(self.speaker_start_idx),
-            "speaker_end_idx": int(self.speaker_end_idx),
+            "speaker": _text_or_none(self.speaker),
+            "speaker_start_idx": _idx_or_none(self.speaker_start_idx),
+            "speaker_end_idx": _idx_or_none(self.speaker_end_idx),
             "quote": self.quote,
             "quote_start_idx": int(self.quote_start_idx),
             "quote_end_idx": int(self.quote_end_idx),
-            "verb": self.verb,
-            "verb_start_idx": int(self.verb_start_idx),
-            "verb_end_idx": int(self.verb_end_idx),
+            "verb": _text_or_none(self.verb),
+            "verb_start_idx": _idx_or_none(self.verb_start_idx),
+            "verb_end_idx": _idx_or_none(self.verb_end_idx),
             "quote_type": self.quote_type,
             "quote_token_count": int(self.quote_token_count),
             "is_floating_quote": bool(self.is_floating_quote),
@@ -608,7 +615,7 @@ def _find_speaker_near(
     verb_index: int,
     verb_end_index: int,
     direction: str,
-) -> Tuple[str, int, int]:
+) -> Tuple[str, Optional[int], Optional[int]]:
     if direction == "left":
         idx = verb_index - 1
         hops = 0
@@ -648,17 +655,21 @@ def _find_speaker_near(
                 return text[token.start : token.end], token.start, token.end
             idx += 1
             hops += 1
-    return "", -1, -1
+    return "", None, None
 
 
 def _compute_quote_type(
     quote_start: int,
     quote_end: int,
-    verb_start: int,
-    verb_end: int,
-    speaker_start: int,
-    speaker_end: int,
+    verb_start: Optional[int],
+    verb_end: Optional[int],
+    speaker_start: Optional[int],
+    speaker_end: Optional[int],
 ) -> str:
+    verb_start = -1 if verb_start is None else verb_start
+    verb_end = -1 if verb_end is None else verb_end
+    speaker_start = -1 if speaker_start is None else speaker_start
+    speaker_end = -1 if speaker_end is None else speaker_end
     positions: List[Tuple[str, float]] = []
     if quote_start >= 0:
         positions.append(("Q", float(quote_start)))
