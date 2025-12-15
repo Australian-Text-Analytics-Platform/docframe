@@ -16,6 +16,57 @@ import polars as pl
 from nltk.tokenize import TreebankWordDetokenizer, TreebankWordTokenizer, word_tokenize
 from sklearn.preprocessing import MinMaxScaler
 
+# Fix NLTK path handling on Windows to prevent mixed separator issues
+# This must happen before any NLTK data loading operations
+if os.name == "nt":  # Windows
+    from pathlib import Path as _Path
+    
+    # Monkey-patch NLTK's data.find and load functions to normalize paths
+    _original_nltk_find = nltk.data.find
+    _original_nltk_load = nltk.data.load
+    
+    def _normalize_path_windows(path_str):
+        """Normalize a path string for Windows, removing UNC prefixes and mixed separators."""
+        try:
+            # Convert to Path object to normalize
+            path_obj = _Path(path_str)
+            # Resolve to get absolute path without UNC prefix
+            resolved = path_obj.resolve()
+            # Convert back to string using the OS-appropriate separator
+            return str(resolved)
+        except Exception:
+            # If normalization fails, return original
+            return path_str
+    
+    def _patched_nltk_find(resource_name, paths=None):
+        """Patched NLTK find that normalizes paths on Windows."""
+        result = _original_nltk_find(resource_name, paths)
+        if isinstance(result, str):
+            return _normalize_path_windows(result)
+        return result
+    
+    def _patched_nltk_load(resource_url, format='auto', cache=True, verbose=False, 
+                           logic_parser=None, fstruct_reader=None, encoding=None):
+        """Patched NLTK load that normalizes file paths on Windows."""
+        # Normalize the resource_url if it's a file path
+        if isinstance(resource_url, str) and not resource_url.startswith(('http:', 'https:', 'file:')):
+            resource_url = _normalize_path_windows(resource_url)
+        
+        return _original_nltk_load(
+            resource_url, format=format, cache=cache, verbose=verbose,
+            logic_parser=logic_parser, fstruct_reader=fstruct_reader, encoding=encoding
+        )
+    
+    # Apply patches
+    nltk.data.find = _patched_nltk_find
+    nltk.data.load = _patched_nltk_load
+    
+    # Also normalize the data paths themselves
+    normalized_paths = []
+    for path_str in nltk.data.path:
+        normalized_paths.append(_normalize_path_windows(path_str))
+    nltk.data.path[:] = normalized_paths
+
 # Suppress sklearn deprecation warnings
 warnings.filterwarnings(
     "ignore", message="'force_all_finite' was renamed to 'ensure_all_finite'"
@@ -143,7 +194,20 @@ def tokenize(text: str, lowercase: bool = True, remove_punct: bool = True) -> Li
 
     _ensure_nltk_punkt()
 
-    tokens = word_tokenize(processed_text)
+    try:
+        tokens = word_tokenize(processed_text)
+    except (OSError, IOError) as e:
+        # Fallback to simple whitespace tokenization if NLTK data loading fails
+        # This can happen on Windows with path issues
+        import warnings
+        warnings.warn(
+            f"NLTK tokenization failed ({e}), falling back to simple split. "
+            "This may affect tokenization quality.",
+            RuntimeWarning
+        )
+        # Simple fallback: split on whitespace and basic punctuation
+        import re
+        tokens = re.findall(r"\w+(?:'\w+)?|[^\w\s]", processed_text)
 
     if remove_punct:
         tokens = [tok for tok in tokens if any(ch.isalnum() for ch in tok)]
