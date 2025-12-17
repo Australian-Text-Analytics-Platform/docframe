@@ -19,12 +19,16 @@ from sklearn.preprocessing import MinMaxScaler
 # Fix NLTK path handling on Windows to prevent mixed separator issues
 # Wrap in try-except to prevent import-time crashes
 if os.name == "nt":  # Windows
+    import sys
+    print("[text_utils] Starting Windows NLTK path patching...", file=sys.stderr, flush=True)
     try:
         from pathlib import Path as _Path
+        print("[text_utils] Imported Path successfully", file=sys.stderr, flush=True)
         
         # Store original functions
         _original_nltk_find = nltk.data.find
         _original_nltk_load = nltk.data.load
+        print("[text_utils] Stored original NLTK functions", file=sys.stderr, flush=True)
         
         def _normalize_path_windows(path_str):
             """Normalize a path string for Windows, removing UNC prefixes and mixed separators."""
@@ -73,12 +77,18 @@ if os.name == "nt":  # Windows
         # Apply patches only if everything succeeded
         nltk.data.find = _patched_nltk_find
         nltk.data.load = _patched_nltk_load
+        print("[text_utils] ✅ Windows NLTK path patches applied successfully", file=sys.stderr, flush=True)
         
     except Exception as e:
         # If Windows patching fails entirely, print warning but don't crash
         import sys
-        print(f"Warning: Failed to apply NLTK Windows path patches: {e}", file=sys.stderr)
+        import traceback
+        print(f"[text_utils] ❌ Failed to apply NLTK Windows path patches: {e}", file=sys.stderr, flush=True)
+        print(f"[text_utils] Traceback: {traceback.format_exc()}", file=sys.stderr, flush=True)
         # Continue without patches - NLTK will use default behavior
+else:
+    import sys
+    print("[text_utils] Not Windows, skipping NLTK patching", file=sys.stderr, flush=True)
 
 # Suppress sklearn deprecation warnings
 warnings.filterwarnings(
