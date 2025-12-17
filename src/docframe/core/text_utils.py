@@ -26,46 +26,63 @@ if os.name == "nt":  # Windows
     _original_nltk_load = nltk.data.load
     
     def _normalize_path_windows(path_str):
-        """Normalize a path string for Windows, removing UNC prefixes and mixed separators."""
+        """Normalize a path string for Windows, removing UNC prefixes and mixed separators.
+        
+        This is a lightweight normalization that doesn't call resolve() to avoid blocking I/O.
+        """
         try:
-            # Convert to Path object to normalize
-            path_obj = _Path(path_str)
-            # Resolve to get absolute path without UNC prefix
-            resolved = path_obj.resolve()
-            # Convert back to string using the OS-appropriate separator
-            return str(resolved)
+            # Simple normalization without resolve() to avoid I/O blocking
+            # Just normalize the separators without accessing the filesystem
+            if not path_str:
+                return path_str
+            
+            # Replace forward slashes with backslashes for Windows
+            normalized = path_str.replace("/", "\\")
+            
+            # Use os.path.normpath to clean up the path without filesystem access
+            normalized = os.path.normpath(normalized)
+            
+            return normalized
         except Exception:
             # If normalization fails, return original
             return path_str
     
     def _patched_nltk_find(resource_name, paths=None):
         """Patched NLTK find that normalizes paths on Windows."""
-        result = _original_nltk_find(resource_name, paths)
-        if isinstance(result, str):
-            return _normalize_path_windows(result)
-        return result
+        try:
+            result = _original_nltk_find(resource_name, paths)
+            if isinstance(result, str):
+                return _normalize_path_windows(result)
+            return result
+        except Exception:
+            # If patching fails, fall back to original behavior
+            return _original_nltk_find(resource_name, paths)
     
     def _patched_nltk_load(resource_url, format='auto', cache=True, verbose=False, 
                            logic_parser=None, fstruct_reader=None, encoding=None):
         """Patched NLTK load that normalizes file paths on Windows."""
-        # Normalize the resource_url if it's a file path
-        if isinstance(resource_url, str) and not resource_url.startswith(('http:', 'https:', 'file:')):
-            resource_url = _normalize_path_windows(resource_url)
-        
-        return _original_nltk_load(
-            resource_url, format=format, cache=cache, verbose=verbose,
-            logic_parser=logic_parser, fstruct_reader=fstruct_reader, encoding=encoding
-        )
+        try:
+            # Normalize the resource_url if it's a file path
+            if isinstance(resource_url, str) and not resource_url.startswith(('http:', 'https:', 'file:')):
+                resource_url = _normalize_path_windows(resource_url)
+            
+            return _original_nltk_load(
+                resource_url, format=format, cache=cache, verbose=verbose,
+                logic_parser=logic_parser, fstruct_reader=fstruct_reader, encoding=encoding
+            )
+        except Exception:
+            # If patching fails, fall back to original behavior
+            return _original_nltk_load(
+                resource_url, format=format, cache=cache, verbose=verbose,
+                logic_parser=logic_parser, fstruct_reader=fstruct_reader, encoding=encoding
+            )
     
     # Apply patches
     nltk.data.find = _patched_nltk_find
     nltk.data.load = _patched_nltk_load
     
-    # Also normalize the data paths themselves
-    normalized_paths = []
-    for path_str in nltk.data.path:
-        normalized_paths.append(_normalize_path_windows(path_str))
-    nltk.data.path[:] = normalized_paths
+    # Note: We don't normalize nltk.data.path at import time to avoid I/O blocking
+    # The paths will be normalized when they're actually used by the patched functions
 
 # Suppress sklearn deprecation warnings
 warnings.filterwarnings(
