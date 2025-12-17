@@ -17,72 +17,68 @@ from nltk.tokenize import TreebankWordDetokenizer, TreebankWordTokenizer, word_t
 from sklearn.preprocessing import MinMaxScaler
 
 # Fix NLTK path handling on Windows to prevent mixed separator issues
-# This must happen before any NLTK data loading operations
+# Wrap in try-except to prevent import-time crashes
 if os.name == "nt":  # Windows
-    from pathlib import Path as _Path
-    
-    # Monkey-patch NLTK's data.find and load functions to normalize paths
-    _original_nltk_find = nltk.data.find
-    _original_nltk_load = nltk.data.load
-    
-    def _normalize_path_windows(path_str):
-        """Normalize a path string for Windows, removing UNC prefixes and mixed separators.
+    try:
+        from pathlib import Path as _Path
         
-        This is a lightweight normalization that doesn't call resolve() to avoid blocking I/O.
-        """
-        try:
-            # Simple normalization without resolve() to avoid I/O blocking
-            # Just normalize the separators without accessing the filesystem
-            if not path_str:
+        # Store original functions
+        _original_nltk_find = nltk.data.find
+        _original_nltk_load = nltk.data.load
+        
+        def _normalize_path_windows(path_str):
+            """Normalize a path string for Windows, removing UNC prefixes and mixed separators."""
+            try:
+                if not path_str or not isinstance(path_str, str):
+                    return path_str
+                
+                # Replace forward slashes with backslashes for Windows
+                normalized = path_str.replace("/", "\\")
+                
+                # Use os.path.normpath to clean up the path without filesystem access
+                normalized = os.path.normpath(normalized)
+                
+                return normalized
+            except Exception:
+                # If normalization fails, return original
                 return path_str
-            
-            # Replace forward slashes with backslashes for Windows
-            normalized = path_str.replace("/", "\\")
-            
-            # Use os.path.normpath to clean up the path without filesystem access
-            normalized = os.path.normpath(normalized)
-            
-            return normalized
-        except Exception:
-            # If normalization fails, return original
-            return path_str
-    
-    def _patched_nltk_find(resource_name, paths=None):
-        """Patched NLTK find that normalizes paths on Windows."""
-        try:
-            result = _original_nltk_find(resource_name, paths)
-            if isinstance(result, str):
-                return _normalize_path_windows(result)
-            return result
-        except Exception:
-            # If patching fails, fall back to original behavior
-            return _original_nltk_find(resource_name, paths)
-    
-    def _patched_nltk_load(resource_url, format='auto', cache=True, verbose=False, 
-                           logic_parser=None, fstruct_reader=None, encoding=None):
-        """Patched NLTK load that normalizes file paths on Windows."""
-        try:
-            # Normalize the resource_url if it's a file path
-            if isinstance(resource_url, str) and not resource_url.startswith(('http:', 'https:', 'file:')):
-                resource_url = _normalize_path_windows(resource_url)
+        
+        def _patched_nltk_find(resource_name, paths=None):
+            """Patched NLTK find that normalizes paths on Windows."""
+            try:
+                result = _original_nltk_find(resource_name, paths)
+                if isinstance(result, str):
+                    return _normalize_path_windows(result)
+                return result
+            except Exception as e:
+                # If patching fails, fall back to original behavior
+                raise
+        
+        def _patched_nltk_load(resource_url, format='auto', cache=True, verbose=False, 
+                               logic_parser=None, fstruct_reader=None, encoding=None):
+            """Patched NLTK load that normalizes file paths on Windows."""
+            try:
+                # Normalize the resource_url if it's a file path
+                if isinstance(resource_url, str) and not resource_url.startswith(('http:', 'https:', 'file:')):
+                    resource_url = _normalize_path_windows(resource_url)
+            except Exception:
+                # If normalization fails, use original path
+                pass
             
             return _original_nltk_load(
                 resource_url, format=format, cache=cache, verbose=verbose,
                 logic_parser=logic_parser, fstruct_reader=fstruct_reader, encoding=encoding
             )
-        except Exception:
-            # If patching fails, fall back to original behavior
-            return _original_nltk_load(
-                resource_url, format=format, cache=cache, verbose=verbose,
-                logic_parser=logic_parser, fstruct_reader=fstruct_reader, encoding=encoding
-            )
-    
-    # Apply patches
-    nltk.data.find = _patched_nltk_find
-    nltk.data.load = _patched_nltk_load
-    
-    # Note: We don't normalize nltk.data.path at import time to avoid I/O blocking
-    # The paths will be normalized when they're actually used by the patched functions
+        
+        # Apply patches only if everything succeeded
+        nltk.data.find = _patched_nltk_find
+        nltk.data.load = _patched_nltk_load
+        
+    except Exception as e:
+        # If Windows patching fails entirely, print warning but don't crash
+        import sys
+        print(f"Warning: Failed to apply NLTK Windows path patches: {e}", file=sys.stderr)
+        # Continue without patches - NLTK will use default behavior
 
 # Suppress sklearn deprecation warnings
 warnings.filterwarnings(
