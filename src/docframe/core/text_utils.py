@@ -77,13 +77,13 @@ if os.name == "nt":  # Windows
         # Apply patches only if everything succeeded
         nltk.data.find = _patched_nltk_find
         nltk.data.load = _patched_nltk_load
-        print("[text_utils] ✅ Windows NLTK path patches applied successfully", file=sys.stderr, flush=True)
+        print("[text_utils] SUCCESS: Windows NLTK path patches applied successfully", file=sys.stderr, flush=True)
         
     except Exception as e:
         # If Windows patching fails entirely, print warning but don't crash
         import sys
         import traceback
-        print(f"[text_utils] ❌ Failed to apply NLTK Windows path patches: {e}", file=sys.stderr, flush=True)
+        print(f"[text_utils] ERROR: Failed to apply NLTK Windows path patches: {e}", file=sys.stderr, flush=True)
         print(f"[text_utils] Traceback: {traceback.format_exc()}", file=sys.stderr, flush=True)
         # Continue without patches - NLTK will use default behavior
 else:
